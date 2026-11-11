@@ -1,15 +1,16 @@
-
 #include "polygon.h"
 #include "graphics.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cstdlib>
 #include <vector>
 
 // Draw a line using Bresenham's algorithm.
 // This is temporary until Person 2's line functions are integrated.
-static void drawPolygonLine(int x1, int y1, int x2, int y2) {
-    int dx = abs(x2 - x1);
-    int dy = abs(y2 - y1);
+static void drawPolygonLine(int x1, int y1, int x2, int y2, Color c) {
+    int dx = std::abs(x2 - x1);
+    int dy = std::abs(y2 - y1);
 
     int sx = (x1 < x2) ? 1 : -1;
     int sy = (y1 < y2) ? 1 : -1;
@@ -17,7 +18,7 @@ static void drawPolygonLine(int x1, int y1, int x2, int y2) {
     int error = dx - dy;
 
     while (true) {
-        putPixel(x1, y1);
+        gfx::putPixel(x1, y1, c);
 
         if (x1 == x2 && y1 == y2)
             break;
@@ -37,7 +38,7 @@ static void drawPolygonLine(int x1, int y1, int x2, int y2) {
 }
 
 // Draw polygon outline
-void drawPolygon(const std::vector<PolygonPoint>& vertices) {
+void drawPolygon(const std::vector<Point>& vertices, Color c) {
     int n = vertices.size();
 
     if (n < 2)
@@ -50,13 +51,14 @@ void drawPolygon(const std::vector<PolygonPoint>& vertices) {
             vertices[i].x,
             vertices[i].y,
             vertices[next].x,
-            vertices[next].y
+            vertices[next].y,
+            c
         );
     }
 }
 
 // Fill polygon using Scanline Filling Algorithm
-void fillPolygonScanline(const std::vector<PolygonPoint>& vertices) {
+void fillPolygonScanline(const std::vector<Point>& vertices, Color c) {
     int n = vertices.size();
 
     if (n < 3)
@@ -76,8 +78,8 @@ void fillPolygonScanline(const std::vector<PolygonPoint>& vertices) {
 
         // Find intersections between scanline and polygon edges
         for (int i = 0; i < n; i++) {
-            PolygonPoint p1 = vertices[i];
-            PolygonPoint p2 = vertices[(i + 1) % n];
+            Point p1 = vertices[i];
+            Point p2 = vertices[(i + 1) % n];
 
             // Ignore horizontal edges and use half-open intervals
             if (p1.y == p2.y)
@@ -109,7 +111,7 @@ void fillPolygonScanline(const std::vector<PolygonPoint>& vertices) {
             );
 
             for (int x = startX; x <= endX; x++) {
-                putPixel(x, y);
+                gfx::putPixel(x, y, c);
             }
         }
     }

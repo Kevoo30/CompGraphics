@@ -1,20 +1,8 @@
-
-#ifndef POLYGON_H
-#define POLYGON_H
-
+#pragma once
+#include "graphics.h"   // Point, Color, gfx::putPixel
 #include <vector>
-#include "graphics.h"
 
-// Represents a 2D point
-struct PolygonPoint {
-    int x;
-    int y;
-};
-
-// Draw the outline of a polygon using Bresenham's line algorithm
-void drawPolygon(const std::vector<PolygonPoint>& vertices);
-
-// Fill a polygon using the Scanline Filling Algorithm
-void fillPolygonScanline(const std::vector<PolygonPoint>& vertices);
-
-#endif
+// Agreed interface (Person 4). Do not change these signatures:
+// scene.cpp and main.cpp call them exactly like this.
+void drawPolygon(const std::vector<Point>& vertices, Color c);
+void fillPolygonScanline(const std::vector<Point>& vertices, Color c);
