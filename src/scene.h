@@ -3,7 +3,7 @@
 // Person 5 - scene assets for "The People Are Watching"
 
 // Colours for one character.
-struct PersonStyle { Color skin, suit, shirt, tie, trousers; };
+struct PersonStyle { Color skin, suit, shirt, tie, trousers; Color hair{25, 20, 18}; };
 
 // ---- Called from main.cpp (same names and arguments as the original stubs) ----
 void drawBuilding();            // ground + government building, sized from the window

@@ -3,19 +3,32 @@
 #include "transform.h"
 #include "animation.h"
 #include "crowd.h"
+#include "effects.h"
+#include <algorithm>
 #include <cmath>
 
-// Placeholder scene proving the whole pipeline works: transform -> render -> animation -> input.
-// Person 5: replace this with the real building, flag, podium and person ported from scene.cpp,
-// add gradients, shadows and the Kenyan flag shield.
+// OpenGL scene for "The People Are Watching" (Person 5).
+// Pipeline: input -> camera (Mat3 from transform.*) -> effects:: assets -> animation.* + crowd.*
 
 namespace {
     float camX = 0, camY = 0, zoomLevel = 1.0f;
     bool  paused = false;
     float sceneTime = 0;
+    float gestureStart = -100.0f;        // sceneTime at which G was last pressed
 
-    typedef std::vector<Vec2> Poly;
-    Poly rect(float x, float y, float w, float h) { return {{x, y}, {x + w, y}, {x + w, y + h}, {x, y + h}}; }
+    const float kDeg = 3.14159265f / 180.0f;
+
+    // Speaker's raised-arm angle (radians, 0 = down, positive = raised).
+    // Idle: Person 3's speakerArmAngle() cycle. G key: a bigger, eased "wave to the crowd" on top of it.
+    float speakerRaise(float t) {
+        float idle = -speakerArmAngle(t) * kDeg;                 // speakerArmAngle() returns -10..-65 degrees
+        float k = (t - gestureStart) / 2.5f;                     // gesture lasts 2.5 s
+        if (k > 0.0f && k < 1.0f) {
+            float bump = easeInOut(1.0f - std::fabs(2.0f * k - 1.0f));   // up then down
+            return idle + (125.0f * kDeg - idle) * bump;
+        }
+        return idle;
+    }
 }
 
 void drawScene(float time, const Input& in) {
@@ -23,45 +36,28 @@ void drawScene(float time, const Input& in) {
     float dt = render::deltaTime();
     if (in.pause) paused = !paused;
     if (!paused) sceneTime += dt;
+    if (in.gesture) gestureStart = sceneTime;
     camX += in.camDx * 200.0f * dt;
     camY += in.camDy * 200.0f * dt;
-    zoomLevel *= 1.0f + in.zoom * 1.0f * dt;
+    zoomLevel = std::max(0.5f, std::min(3.0f, zoomLevel * (1.0f + in.zoom * 1.0f * dt)));
 
     // Camera = move to centre, zoom, move back (all with our own Mat3 maths)
     Mat3 cam = translate(400, 300) * scale(zoomLevel, zoomLevel) * translate(-400 - camX, -300 - camY);
-    auto T = [&](const Poly& p) { return transformPoly(cam, p); };
 
-    // Sky and ground
-    render::fillPolygonGradient(T(rect(-2000, -2000, 4800, 2400)), {70, 130, 200}, {200, 225, 245});
-    render::fillPolygonGradient(T(rect(-2000, 400, 4800, 2000)), {90, 120, 70}, {50, 75, 45});
-    drawAnimatedClouds(sceneTime);
-    // Building
-    render::fillPolygonGradient(T(rect(150, 380, 500, 20)), {200, 198, 190}, {150, 148, 140});
-    render::fillPolygonGradient(T(rect(170, 200, 460, 180)), {235, 230, 218}, {195, 188, 172});
-    for (int i = 0; i < 6; i++)
-        render::fillPolygonGradient(T(rect(190.0f + i * 72, 200, 26, 180)), {250, 247, 238}, {170, 163, 150}, true);
-    render::fillPolygonGradient(T({{150, 200}, {650, 200}, {400, 120}}), {225, 220, 208}, {170, 165, 152});
-    render::drawPolygon(T({{150, 200}, {650, 200}, {400, 120}}), {120, 115, 105});
-    render::fillCircle(cam * Vec2{400, 170}, 18 * zoomLevel, {190, 150, 60});
+    // Back to front
+    effects::drawSky(cam, sceneTime);
+    effects::drawGround(cam);
+    drawAnimatedClouds(sceneTime);                     // Person 3 (drawn in screen space, so clouds ignore the camera)
+    effects::drawBuilding(cam, sceneTime);
+    effects::drawFlag(cam, sceneTime);
 
-    // Flagpole + waving flag (each stripe is a strip whose vertices are displaced by flagWave)
-    render::drawLine(cam * Vec2{700, 150}, cam * Vec2{700, 400}, {80, 80, 80});
-    const Color top[3] = {{20, 20, 20}, {200, 30, 30}, {30, 140, 60}};
-    const Color bot[3] = {{0, 0, 0},    {140, 15, 15}, {15, 90, 35}};
-    for (int s = 0; s < 3; s++) {
-        Poly strip;
-        float y0 = 155.0f + s * 20, y1 = y0 + 20;
-        for (int x = 0; x <= 88; x += 8) strip.push_back(flagWave({702.0f + x, y0}, sceneTime));
-        for (int x = 88; x >= 0; x -= 8)  strip.push_back(flagWave({702.0f + x, y1}, sceneTime));
-        render::fillPolygonGradient(T(strip), top[s], bot[s], true);
-    }
+    // Speaker: stands on the top step behind the podium (same positions as the CP2 scene)
+    PersonStyle presenter{ {141, 85, 36}, {40, 40, 90}, {255, 255, 255}, {190, 0, 0}, {30, 30, 60} };
+    effects::Pose pose;
+    pose.rightArm = speakerRaise(sceneTime);
+    effects::drawPerson(cam, {400, 380}, 1.0f, presenter, 1, pose);
+    effects::drawPodium(cam, {400, 450});
 
-    // Shadow under the building
-    render::fillPolygonAlpha(T({{160, 400}, {660, 400}, {760, 470}, {260, 470}}), {0, 0, 0}, 0.28f);
-
-    // Person 3: animated speaker
-    drawAnimatedSpeaker(sceneTime, cam);
-
-    // Audience in front
+    // Audience in front (Person 4)
     drawCrowd(sceneTime, cam);
 }
