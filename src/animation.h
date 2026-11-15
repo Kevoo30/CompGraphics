@@ -5,3 +5,8 @@
 void  updateAnimations(float dt);          // called once per frame by main
 Vec2  flagWave(Vec2 base, float time);     // returns the waved position of a flag vertex
 float easeInOut(float t);                  // t in 0..1 -> smooth 0..1
+float cloudPosition(float startX, float time, float speed, float screenWidth);
+float speakerArmAngle(float time);
+float animationTime();
+void drawAnimatedClouds(float time);
+void drawAnimatedSpeaker(float time, const Mat3& cam);
