@@ -34,7 +34,7 @@ void drawScene(float time, const Input& in) {
     // Sky and ground
     render::fillPolygonGradient(T(rect(-2000, -2000, 4800, 2400)), {70, 130, 200}, {200, 225, 245});
     render::fillPolygonGradient(T(rect(-2000, 400, 4800, 2000)), {90, 120, 70}, {50, 75, 45});
-
+    drawAnimatedClouds(sceneTime);
     // Building
     render::fillPolygonGradient(T(rect(150, 380, 500, 20)), {200, 198, 190}, {150, 148, 140});
     render::fillPolygonGradient(T(rect(170, 200, 460, 180)), {235, 230, 218}, {195, 188, 172});
@@ -58,6 +58,9 @@ void drawScene(float time, const Input& in) {
 
     // Shadow under the building
     render::fillPolygonAlpha(T({{160, 400}, {660, 400}, {760, 470}, {260, 470}}), {0, 0, 0}, 0.28f);
+
+    // Person 3: animated speaker
+    drawAnimatedSpeaker(sceneTime, cam);
 
     // Audience in front
     drawCrowd(sceneTime, cam);
