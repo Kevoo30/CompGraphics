@@ -36,10 +36,16 @@ void drawScene(float time, const Input& in) {
     float dt = render::deltaTime();
     if (in.pause) paused = !paused;
     if (!paused) sceneTime += dt;
-    if (in.gesture) gestureStart = sceneTime;
-    camX += in.camDx * 200.0f * dt;
-    camY += in.camDy * 200.0f * dt;
-    zoomLevel = std::max(0.5f, std::min(3.0f, zoomLevel * (1.0f + in.zoom * 1.0f * dt)));
+    if (in.gesture) { gestureStart = sceneTime; cheer(sceneTime, 3.5f); }   // speaker waves, crowd cheers
+    if (in.applause) setApplause(!isApplauding());
+    if (in.resetCamera) { camX = camY = 0; zoomLevel = 1.0f; }
+
+    camX += in.camDx * 200.0f * dt / zoomLevel;
+    camY += in.camDy * 200.0f * dt / zoomLevel;
+    camX -= in.mouseDx / zoomLevel;                          // dragging moves the world with the cursor
+    camY -= in.mouseDy / zoomLevel;
+    zoomLevel *= (1.0f + in.zoom * 1.0f * dt) * std::pow(1.1f, in.wheel);
+    zoomLevel = std::max(0.5f, std::min(3.0f, zoomLevel));
 
     // Camera = move to centre, zoom, move back (all with our own Mat3 maths)
     Mat3 cam = translate(400, 300) * scale(zoomLevel, zoomLevel) * translate(-400 - camX, -300 - camY);
