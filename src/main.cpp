@@ -7,12 +7,14 @@
 #include "input.h"
 #include "animation.h"
 #include "scene_gl.h"
+#include "transform_demo.h"
 #include <cstring>
 
 // Usage:
 //   people_are_watching.exe              OpenGL version (CP3)
 //   people_are_watching.exe --software   original pure C++ software version (CP2)
-//   add --shot to either: render one frame, save the screenshot and exit
+//   people_are_watching.exe --transform  Person 2's transformations demo (SPACE pause, P screenshot)
+//   add --shot to any of them: render one frame, save the screenshot and exit
 
 static int runSoftware(bool shotOnly) {
     gfx::init(800, 600, "The People Are Watching (software renderer)");
@@ -62,11 +64,37 @@ static int runOpenGL(bool shotOnly) {
     return 0;
 }
 
+static int runTransformDemo(bool shotOnly) {
+    render::init(800, 600, "Transformations demo (Person 2)");
+    float t = shotOnly ? 2.2f : 0.0f;                     // screenshot mode: a frame with everything mid-motion
+    bool paused = shotOnly;
+    int frame = 0;
+    while (!render::pollQuit()) {
+        Input in = pollInput();
+        if (in.pause) paused = !paused;
+
+        render::beginFrame({0, 0, 0});
+        if (!paused) t += render::deltaTime();
+        drawTransformDemo(t, {(float)in.mouseX, (float)in.mouseY});
+        render::endFrame();
+
+        if (in.screenshot) render::saveScreenshot("screenshot_transform.bmp");
+        if (shotOnly && ++frame == 3) {
+            render::saveScreenshot("screenshot_transform.bmp");
+            break;
+        }
+    }
+    render::shutdown();
+    return 0;
+}
+
 int main(int argc, char** argv) {
-    bool software = false, shot = false;
+    bool software = false, shot = false, transformDemo = false;
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--software") == 0) software = true;
         if (std::strcmp(argv[i], "--shot") == 0) shot = true;
+        if (std::strcmp(argv[i], "--transform") == 0) transformDemo = true;
     }
+    if (transformDemo) return runTransformDemo(shot);
     return software ? runSoftware(shot) : runOpenGL(shot);
 }
