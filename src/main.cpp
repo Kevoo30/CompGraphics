@@ -8,12 +8,17 @@
 #include "animation.h"
 #include "scene_gl.h"
 #include "transform_demo.h"
+#include "film.h"
+#include "audio.h"
 #include <cstring>
+#include <cstdlib>
 
 // Usage:
 //   people_are_watching.exe              OpenGL version (CP3)
 //   people_are_watching.exe --software   original pure C++ software version (CP2)
 //   people_are_watching.exe --transform  Person 2's transformations demo (SPACE pause, P screenshot)
+//   people_are_watching.exe --film       the 2022-2026 documentary (SPACE pause, LEFT/RIGHT change shot, ESC quit)
+//   people_are_watching.exe --film --at 35   save the film frame at 35 s to film_frame.bmp and exit
 //   add --shot to any of them: render one frame, save the screenshot and exit
 
 static int runSoftware(bool shotOnly) {
@@ -88,13 +93,48 @@ static int runTransformDemo(bool shotOnly) {
     return 0;
 }
 
+static int runFilm(bool haveAt, float atSeconds) {
+    render::init(800, 600, "The People Are Watching - 2022 to 2026");
+    if (!haveAt) audio::init();                            // no sound when just checking a frame
+    film::init();
+    if (haveAt) {
+        film::seek(atSeconds);
+        film::update(0.0f, Input{});
+        render::beginFrame({0, 0, 0});
+        film::draw();
+        render::endFrame();
+        render::beginFrame({0, 0, 0});                     // draw twice so the buffer being read is the finished frame
+        film::draw();
+        render::saveScreenshot("film_frame.bmp");
+        render::endFrame();
+        render::shutdown();
+        return 0;
+    }
+    while (!render::pollQuit() && !film::finished()) {
+        Input in = pollInput();
+        audio::update();
+        film::update(render::deltaTime(), in);
+        render::beginFrame({0, 0, 0});
+        film::draw();
+        render::endFrame();
+        if (in.screenshot) render::saveScreenshot("screenshot_film.bmp");
+    }
+    audio::shutdown();
+    render::shutdown();
+    return 0;
+}
+
 int main(int argc, char** argv) {
-    bool software = false, shot = false, transformDemo = false;
+    bool software = false, shot = false, transformDemo = false, filmMode = false, haveAt = false;
+    float atSeconds = 0.0f;
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--software") == 0) software = true;
         if (std::strcmp(argv[i], "--shot") == 0) shot = true;
         if (std::strcmp(argv[i], "--transform") == 0) transformDemo = true;
+        if (std::strcmp(argv[i], "--film") == 0) filmMode = true;
+        if (std::strcmp(argv[i], "--at") == 0 && i + 1 < argc) { haveAt = true; atSeconds = (float)std::atof(argv[++i]); }
     }
+    if (filmMode) return runFilm(haveAt, atSeconds);
     if (transformDemo) return runTransformDemo(shot);
     return software ? runSoftware(shot) : runOpenGL(shot);
 }

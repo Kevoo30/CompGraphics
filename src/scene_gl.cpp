@@ -61,7 +61,8 @@ void drawScene(float time, const Input& in) {
     PersonStyle presenter{ {141, 85, 36}, {40, 40, 90}, {255, 255, 255}, {190, 0, 0}, {30, 30, 60} };
     effects::Pose pose;
     pose.rightArm = speakerRaise(sceneTime);
-    effects::drawPerson(cam, {400, 380}, 1.0f, presenter, 1, pose);
+    const float kSpeakerScale = 0.47f;   // crowd rows are 0.38 / 0.47 / 0.56
+    effects::drawPerson(cam, {400, 380}, kSpeakerScale, presenter, 1, pose);
     effects::drawPodium(cam, {400, 450});
 
     // Audience in front (Person 4)
