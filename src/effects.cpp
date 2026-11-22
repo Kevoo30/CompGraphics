@@ -101,11 +101,11 @@ void drawSky(const Mat3& cam, float time) {
 
     // sun: bright core and soft concentric halos (semi-transparent discs)
     const Vec2 sun = { 120.0f, 95.0f };
-    const Color warm = rgb(255, 238, 180);
+    const Color warm = rgb(255, 214, 100);
     for (int i = 14; i >= 1; i--)                                   // many faint rings so the halo looks smooth
         glow(cam, circleP(sun, 24.0f + i * 6.5f, 48), warm, 0.035f);
     float pulse = 1.0f + 0.03f * std::sin(time * 1.5f);            // tiny breathing so the sun is not dead still
-    disc(cam, sun, 24.0f * pulse, rgb(255, 247, 215));
+    disc(cam, sun, 24.0f * pulse, rgb(255, 226, 90));
 }
 
 void drawGround(const Mat3& cam) {

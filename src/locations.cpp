@@ -35,16 +35,31 @@ void line(const Mat3& M, Vec2 a, Vec2 b, Color c)                    { render::d
 void disc(const Mat3& M, Vec2 c, float r, Color col)                 { render::fillCircle(M * c, r * zoomOf(M), col); }
 void glow(const Mat3& M, Vec2 c, float r, Color col, float a)        { shade(M, ellipse(c.x, c.y, r, r, 16), col, a); }
 
+// Crescent moon: the part of a disc (radius R) that a slightly smaller disc, shifted to the right, does not cover.
+Poly crescent(Vec2 c, float R, float tilt) {
+    const float R2 = 0.95f * R, d = 0.30f * R;                       // the circle that takes the bite
+    float xi = (R * R - R2 * R2 + d * d) / (2 * d);                  // where the two outlines cross
+    float yi = std::sqrt(std::max(0.0f, R * R - xi * xi));
+    float a0 = std::atan2(yi, xi), b0 = std::atan2(yi, xi - d);
+    Poly raw;
+    const int n = 20;
+    for (int i = 0; i <= n; i++) { float a = a0 + (2 * PI - 2 * a0) * i / n; raw.push_back({R * std::cos(a), R * std::sin(a)}); }                       // outer edge, round the left
+    for (int i = 0; i <= n; i++) { float b = (2 * PI - b0) - (2 * PI - 2 * b0) * i / n; raw.push_back({d + R2 * std::cos(b), R2 * std::sin(b)}); }     // inner edge, back along the bite
+    float cs = std::cos(tilt), sn = std::sin(tilt);
+    for (Vec2& v : raw) v = {c.x + v.x * cs - v.y * sn, c.y + v.x * sn + v.y * cs};
+    return raw;
+}
+
 // ---------- sky / ground palettes ----------
 struct Pal { Color top, bot, gTop, gBot, tint; float tintA; bool night; Color sun; float sx, sy, sr; };
 Pal palette(int sky) {
     switch (sky) {
-        case 0:  return {{60, 90, 150},  {250, 190, 130}, {95, 105, 75},  {55, 70, 50},  {255, 170, 90}, 0.06f, false, {255, 225, 160}, 560, 372, 26};
-        case 1:  return {{70, 130, 200}, {200, 225, 245}, {100, 130, 80}, {55, 85, 50},  {0, 0, 0},      0.00f, false, {255, 250, 220}, 150, 110, 22};
-        case 2:  return {{35, 105, 200}, {225, 238, 250}, {135, 140, 85}, {95, 105, 60}, {255, 255, 235}, 0.05f, false, {255, 255, 240}, 400, 70, 26};
+        case 0:  return {{60, 90, 150},  {250, 190, 130}, {95, 105, 75},  {55, 70, 50},  {255, 170, 90}, 0.06f, false, {255, 205, 110}, 560, 372, 26};
+        case 1:  return {{70, 130, 200}, {200, 225, 245}, {100, 130, 80}, {55, 85, 50},  {0, 0, 0},      0.00f, false, {255, 224, 90}, 150, 110, 22};
+        case 2:  return {{35, 105, 200}, {225, 238, 250}, {135, 140, 85}, {95, 105, 60}, {255, 255, 235}, 0.05f, false, {255, 232, 100}, 400, 70, 26};
         case 3:  return {{45, 45, 105},  {245, 130, 80},  {70, 75, 70},   {35, 40, 45},  {255, 120, 60}, 0.10f, false, {255, 170, 90}, 640, 378, 34};
-        case 4:  return {{8, 10, 30},    {38, 42, 78},    {30, 38, 45},   {12, 16, 22},  {20, 30, 90},   0.18f, true,  {235, 235, 245}, 620, 90, 18};
-        default: return {{20, 30, 70},   {125, 110, 145}, {45, 55, 60},   {20, 28, 32},  {90, 100, 180}, 0.10f, false, {200, 190, 220}, 420, 385, 20};
+        case 4:  return {{8, 10, 30},    {38, 42, 78},    {30, 38, 45},   {12, 16, 22},  {20, 30, 90},   0.18f, true,  {240, 238, 215}, 620, 70, 18};
+        default: return {{20, 30, 70},   {125, 110, 145}, {45, 55, 60},   {20, 28, 32},  {90, 100, 180}, 0.10f, false, {255, 200, 120}, 420, 385, 20};
     }
 }
 
@@ -58,9 +73,17 @@ void drawSky(const Mat3& M, const Pal& p, float horizon, float t) {
             disc(M, {hash(i) * 800, hash(i + 99) * (horizon - 60)}, 1.2f, c);
         }
     }
-    glow(M, {p.sx, p.sy}, p.sr * 3.2f, p.sun, 0.10f);
-    glow(M, {p.sx, p.sy}, p.sr * 1.8f, p.sun, 0.15f);
-    disc(M, {p.sx, p.sy}, p.sr, p.sun);
+    if (p.night) {                                                   // crescent moon with a cool glow and a faint dark side
+        Vec2 mc = {p.sx, p.sy};
+        glow(M, mc, p.sr * 3.0f, {170, 185, 255}, 0.07f);
+        glow(M, mc, p.sr * 1.8f, {200, 210, 255}, 0.10f);
+        shade(M, ellipse(mc.x, mc.y, p.sr * 1.25f, p.sr * 1.25f, 32), {150, 160, 200}, 0.10f);
+        fill(M, crescent(mc, p.sr * 1.25f, -0.45f), p.sun);
+    } else {                                                         // sun
+        glow(M, {p.sx, p.sy}, p.sr * 3.2f, p.sun, 0.10f);
+        glow(M, {p.sx, p.sy}, p.sr * 1.8f, p.sun, 0.15f);
+        disc(M, {p.sx, p.sy}, p.sr, p.sun);
+    }
     grad(M, rect(-40, horizon, 880, 700 - horizon), p.gTop, p.gBot);
     fill(M, rect(-40, 700, 880, 1300), p.gBot);
 }
@@ -184,9 +207,13 @@ void locBomas(const Mat3& M, float t, const Mood& m, const Pal& p) {
     for (int i = 0; i <= 24; i++) { float a = PI * i / 24; dome.push_back({400 - 240 * std::cos(a), 320 - 125 * std::sin(a)}); }
     grad(M, dome, {240, 235, 222}, {150, 145, 135}, true);
     for (int i = 1; i < 6; i++) line(M, {400 - 240 * std::cos(PI * i / 6), 320 - 125 * std::sin(PI * i / 6)}, {400, 320}, {170, 165, 150});
-    fill(M, rect(365, 345, 70, 55), {50, 45, 45});
-    for (int i = 0; i < 6; i++) fill(M, rect(185 + i * 38, 335, 18, 50), {95, 100, 110});
-    for (int i = 0; i < 6; i++) fill(M, rect(425 + 40 + i * 38 - 38, 335, 18, 50), {95, 100, 110});
+    grad(M, rect(357, 338, 86, 62), {235, 230, 216}, {190, 185, 170});            // stone frame round the door
+    fill(M, rect(365, 345, 70, 55), {50, 45, 45});                                  // door
+    for (int i = 0; i < 6; i++) {                                                   // six windows each side, clear of the door
+        float wx = 170 + i * 31.8f;                                                 // left block ends at x = 347
+        fill(M, rect(wx, 335, 18, 50), {95, 100, 110});
+        fill(M, rect(800 - 18 - wx, 335, 18, 50), {95, 100, 110});                  // mirror image on the right
+    }
     flagPole(M, 110, 410, 190, m.halfMast, t);
     flagPole(M, 690, 410, 190, m.halfMast, t);
     people(M, m, t, 60, 740, 450, 14);
