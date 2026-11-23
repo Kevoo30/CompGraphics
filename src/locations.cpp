@@ -89,6 +89,13 @@ void drawSky(const Mat3& M, const Pal& p, float horizon, float t) {
 }
 
 // ---------- Kenyan flag (waves using animation.cpp) ----------
+// flagWave() measures the wave from a pole at x = 702, so a flag drawn anywhere else would not move at all.
+// This puts each point at that reference position, waves it, and keeps only the vertical movement.
+// The time is offset by the pole's x, so two flags in one shot do not wave in step.
+Vec2 wavePoint(float along, float y, float poleX, float t) {
+    Vec2 w = flagWave({702.0f + along, y}, t + poleX * 0.017f);
+    return {poleX + along + (w.x - (702.0f + along)), w.y};
+}
 void flag(const Mat3& M, float x, float topY, float w, float h, float t) {
     struct S { float h; Color a, b; };
     const S s[5] = {{0.27f, {25, 25, 25}, {0, 0, 0}}, {0.04f, {245, 245, 245}, {215, 215, 215}},
@@ -98,12 +105,12 @@ void flag(const Mat3& M, float x, float topY, float w, float h, float t) {
     for (int k = 0; k < 5; k++) {
         float hh = h * s[k].h;
         Poly strip;
-        for (float xx = 0; xx <= w; xx += 6) strip.push_back(flagWave({x + xx, y}, t));
-        for (float xx = w; xx >= 0; xx -= 6)  strip.push_back(flagWave({x + xx, y + hh}, t));
+        for (float xx = 0; xx <= w; xx += 6) strip.push_back(wavePoint(xx, y, x, t));
+        for (float xx = w; xx >= 0; xx -= 6)  strip.push_back(wavePoint(xx, y + hh, x, t));
         grad(M, strip, s[k].a, s[k].b, true);
         y += hh;
     }
-    Vec2 c = flagWave({x + w / 2, topY + h / 2}, t);                 // shield and spears
+    Vec2 c = wavePoint(w / 2, topY + h / 2, x, t);                 // shield and spears
     line(M, {c.x - w * 0.18f, c.y + h * 0.30f}, {c.x + w * 0.18f, c.y - h * 0.30f}, {235, 235, 235});
     line(M, {c.x + w * 0.18f, c.y + h * 0.30f}, {c.x - w * 0.18f, c.y - h * 0.30f}, {235, 235, 235});
     Poly sh = ellipse(c.x, c.y, w * 0.10f, h * 0.30f);
@@ -293,7 +300,9 @@ void locStadium(const Mat3& M, float t, const Mood& m, const Pal& p) {
     for (int tier = 0; tier < 4; tier++)
         for (int k = 0; k < 44; k++) {
             float x = 28 + k * 17.5f + (tier % 2) * 8, y = 352 + tier * 28;
-            Color c = hash(k * 13 + tier * 7 + 3) < 0.7f ? Color{22, 22, 28} : Color{200, 200, 205};
+            static const Color festive[6] = {{200, 50, 45}, {50, 90, 170}, {60, 140, 80}, {225, 190, 60}, {235, 235, 235}, {120, 70, 150}};
+            float hv = hash(k * 13 + tier * 7 + 3);
+            Color c = m.mourning ? (hv < 0.7f ? Color{22, 22, 28} : Color{200, 200, 205}) : festive[int(hv * 6) % 6];   // dark for a funeral, colourful otherwise
             disc(M, {x, y - std::fabs(std::sin(t * 2 + k)) * 0.8f}, 5.5f, c);
             fill(M, rect(x - 5, y + 4, 10, 10), mix(c, {0, 0, 0}, 0.2f));
         }

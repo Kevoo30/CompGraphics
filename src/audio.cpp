@@ -198,6 +198,11 @@ void stopAll(bool keepAmbience) {
     SDL_UnlockAudioDevice(dev);
 }
 
+float length(int id) {
+    if (id < 0 || id >= (int)sounds.size()) return 0.0f;
+    return float(sounds[id].data.size()) / float(RATE);
+}
+
 void setMuted(bool m) { muted = m; }
 int  applause()       { return applauseId; }
 
