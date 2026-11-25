@@ -1,6 +1,7 @@
 #include "locations.h"
 #include "render.h"
 #include "animation.h"
+#include "effects.h"
 #include <algorithm>
 #include <cmath>
 #include <vector>
@@ -136,20 +137,39 @@ void people(const Mat3& M, const Mood& m, float t, float x0, float x1, float bas
             float s = size * (1.0f + 0.14f * row);
             float bob = std::fabs(std::sin(t * 3.0f + i * 1.7f)) * s * 0.30f * m.energy;
             float y = baseY + row * size * 0.95f - bob;
+            // Marchers take small, unsynchronised steps instead of bouncing in place.
+            if (m.placards && m.energy > 0.45f)
+                x += std::sin(t * (1.7f + 0.35f * (i % 4)) + i * 1.9f) * size * 0.22f;
             Color c = m.mourning ? shirt[(i % 2) ? 7 : 3] : shirt[(i * 5 + m.seed) % 8];
             if (m.sky == 4) c = mix(c, {10, 12, 30}, 0.45f);
             if (m.sky == 3) c = mix(c, {40, 20, 40}, 0.25f);
             Color sk = skin[(i * 3 + m.seed) % 4];
-            fill(M, {{x - 0.55f * s, y - 2.2f * s}, {x + 0.55f * s, y - 2.2f * s}, {x + 0.70f * s, y}, {x - 0.70f * s, y}}, c);
-            disc(M, {x, y - 2.78f * s}, 0.52f * s, sk);
-            if (m.placards && hash(i + 31 + m.seed) < 0.55f) {
+            bool holdingSign = m.placards && hash(i + 31 + m.seed) < 0.55f;
+            effects::Pose pose;
+            pose.fromBehind = true;
+            if (holdingSign) {
+                pose.leftArm = 2.25f + 0.12f * std::sin(t * 2.0f + i);
+                pose.rightArm = 0.08f * std::sin(t * 1.4f + i);
+            } else if (m.fists && hash(i + 77) < 0.5f) {
+                pose.rightArm = 2.2f + 0.3f * std::sin(t * 4.0f + i);
+            } else {
+                pose.leftArm = 0.05f * std::sin(t * 1.1f + i);
+                pose.rightArm = 0.05f * std::sin(t * 1.3f + i * 1.7f);
+            }
+            PersonStyle style{sk, c, shirt[(i + m.seed) % 8], {150, 35, 35},
+                              shirt[(i * 3 + m.seed + 2) % 8], {25, 18, 15}};
+            // The detailed model is 193 local units tall; s/58 keeps its screen
+            // height close to the old 3.3*s silhouette instead of shrinking it.
+            effects::drawPerson(M, {x, y}, s / 58.0f, style, (i % 2) ? 1 : -1, pose, true);
+            if (holdingSign) {
                 float sway = std::sin(t * 2.0f + i) * 0.35f * s;
                 Vec2 top = {x + 0.9f * s + sway, y - 4.6f * s};
                 line(M, {x + 0.7f * s, y - 1.8f * s}, top, {110, 80, 50});
                 fill(M, {{top.x - 1.2f * s, top.y - 1.6f * s}, {top.x + 1.2f * s, top.y - 1.6f * s}, {top.x + 1.2f * s, top.y}, {top.x - 1.2f * s, top.y}}, sign[(i + m.seed) % 4]);
-            } else if (m.fists && hash(i + 77) < 0.5f) {
-                float up = 0.5f + 0.5f * std::sin(t * 4 + i);
-                fill(M, {{x + 0.45f * s, y - 2.1f * s}, {x + 0.75f * s, y - 2.0f * s}, {x + 1.05f * s, y - 3.4f * s - up * s * 0.5f}, {x + 0.75f * s, y - 3.5f * s - up * s * 0.5f}}, c);
+                // Hand-lettering marks without adding slogans that could misstate the event.
+                line(M, {top.x - 0.72f * s, top.y - 1.12f * s}, {top.x + 0.58f * s, top.y - 1.12f * s}, {35, 35, 38});
+                line(M, {top.x - 0.72f * s, top.y - 0.62f * s}, {top.x + 0.28f * s, top.y - 0.62f * s}, {35, 35, 38});
+                line(M, {top.x - 0.55f * s, top.y - 0.12f * s}, {top.x + 0.66f * s, top.y - 0.12f * s}, {35, 35, 38});
             }
             if (m.candles) {
                 float fl = 0.6f + 0.4f * std::sin(t * 9 + i * 2.3f);
@@ -332,19 +352,40 @@ void locHomestead(const Mat3& M, float t, const Mood& m, const Pal& p) {
 }
 void locBallot(const Mat3& M, float t, const Mood& m, const Pal& p) {
     drawSky(M, p, 395, t);
+    // A modest school polling station with screened booths, a queue lane and a staffed desk.
     grad(M, rect(150, 290, 500, 105), {225, 215, 190}, {170, 160, 140});
     grad(M, {{140, 290}, {660, 290}, {600, 250}, {200, 250}}, {150, 80, 60}, {105, 55, 45});
+    for (int w = 0; w < 5; ++w) {
+        fill(M, rect(190 + w * 86, 315, 42, 45), {95, 120, 135});
+        fill(M, rect(194 + w * 86, 319, 34, 37), {45, 65, 78});
+    }
     fill(M, rect(360, 330, 80, 65), {70, 55, 45});
-    fill(M, rect(300, 305, 200, 18), {245, 245, 245});
-    for (int i = 0; i < 12; i++) fill(M, rect(310 + i * 15, 309, 9, 10), i % 3 == 0 ? Color{200, 40, 40} : (i % 3 == 1 ? Color{30, 30, 30} : Color{40, 140, 70}));
+    line(M, {65, 445}, {265, 445}, {190, 165, 120});
+    line(M, {65, 472}, {265, 472}, {190, 165, 120});
+    for (int x = 75; x <= 255; x += 60) {
+        line(M, {float(x), 438}, {float(x), 478}, {105, 92, 75});
+        disc(M, {float(x), 438}, 2.5f, {205, 180, 130});
+    }
+    grad(M, rect(500, 420, 150, 18), {125, 82, 52}, {75, 48, 34});
+    fill(M, rect(514, 438, 8, 32), {72, 48, 35});
+    fill(M, rect(630, 438, 8, 32), {72, 48, 35});
+    fill(M, rect(520, 414, 30, 5), {242, 240, 226});             // ballot papers
+    fill(M, rect(558, 414, 18, 6), {24, 36, 95});                // indelible-ink pad
     flagPole(M, 110, 400, 190, m.halfMast, t);
     people(M, m, t, 40, 760, 452, 13);
-    // ballot box in the foreground
+    // Sealed ballot box with one folded paper being cast at a time.
     grad(M, {{290, 600}, {510, 600}, {500, 505}, {300, 505}}, {70, 110, 170}, {40, 70, 125});
+    render::drawPolygon(transformPoly(M, {{290, 600}, {510, 600}, {500, 505}, {300, 505}}), {22, 35, 62});
     fill(M, rect(365, 507, 70, 8), {15, 15, 20});
-    float drop = std::fmod(t * 0.6f, 1.0f);
-    fill(M, rect(372, 470 + drop * 42, 56, 38), {248, 248, 240});
-    fill(M, rect(380, 480 + drop * 42, 40, 3), {120, 120, 130}); fill(M, rect(380, 489 + drop * 42, 30, 3), {120, 120, 130});
+    float cycle = std::fmod(t + 1.4f, 5.0f);
+    float drop = cycle < 1.6f ? cycle / 1.6f : 1.0f;
+    if (cycle < 2.0f) {
+        float y = 459.0f + drop * 44.0f;
+        fill(M, {{382, y}, {418, y}, {412, y + 20}, {388, y + 20}}, {248, 248, 240});
+        line(M, {390, y + 6}, {410, y + 6}, {135, 135, 140});
+    }
+    fill(M, rect(468, 540, 5, 23), {45, 60, 145});            // inked finger mark
+    disc(M, {470, 536}, 3.2f, {45, 60, 145});
 }
 
 } // namespace

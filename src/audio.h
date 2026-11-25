@@ -11,6 +11,7 @@ namespace audio {
 
     int  load(const char* wavPath);                 // load a .wav file (any rate/channels). Returns a sound id, or -1 if the file is missing
     float length(int id);                           // length of a loaded sound in seconds (0 if the id is not valid)
+    float wavLength(const char* wavPath);            // read WAV duration without opening an audio device
     void play(int id, float volume = 1.0f, bool loop = false);
     void stopAll(bool keepAmbience = false);        // keepAmbience = true leaves the looping crowd murmur playing
     void setMuted(bool muted);

@@ -21,3 +21,21 @@ endif()
 
 # OpenGL: OpenGL::GL on all platforms (opengl32 on Windows)
 target_link_libraries(people_are_watching PRIVATE OpenGL::GL)
+
+add_custom_target(export_video
+    COMMAND $<TARGET_FILE:people_are_watching> --export-video ${CMAKE_BINARY_DIR}/people_are_watching.mp4
+    DEPENDS people_are_watching
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Rendering the documentary at 1080p / 30 fps (requires ffmpeg on PATH)"
+)
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(transform_test tests/transform_test.cpp src/transform.cpp)
+    target_include_directories(transform_test PRIVATE src)
+    add_test(NAME transform_test COMMAND transform_test)
+
+    add_executable(simulation_test tests/simulation_test.cpp src/simulation.cpp src/scenario.cpp)
+    target_include_directories(simulation_test PRIVATE src)
+    add_test(NAME simulation_test COMMAND simulation_test)
+endif()

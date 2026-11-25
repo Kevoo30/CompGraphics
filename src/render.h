@@ -8,7 +8,7 @@
 // (same as the CP2 software renderer), so scene code ports straight over.
 
 namespace render {
-    void  init(int w, int h, const char* title);
+    void  init(int w, int h, const char* title, bool hidden = false);
     void  shutdown();
 
     bool  pollQuit();                  // true when window closed or ESC pressed; also pumps input events
@@ -33,4 +33,6 @@ namespace render {
     void drawCircle(Vec2 center, float r, Color c);
 
     void saveScreenshot(const char* path);   // BMP of the current frame
+    bool readPixelsRGB(std::vector<unsigned char>& topDownPixels);
+    bool isReady();
 }
