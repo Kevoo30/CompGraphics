@@ -252,7 +252,7 @@ void init() {
     }
     buildInside();
     musicId = audio::load("assets/music.wav");
-    if (musicId >= 0) audio::play(musicId, 0.25f, true);
+    if (musicId >= 0) audio::play(musicId, 0.98f, true);
     T = 0; paused = false; done = false; lastShot = -1;
 }
 

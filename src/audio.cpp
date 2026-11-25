@@ -194,7 +194,7 @@ void stopAll(bool keepAmbience) {
     if (!dev) return;
     SDL_LockAudioDevice(dev);
     for (Voice& v : voices)
-        if (v.active && v.fadeOut < 0 && !(keepAmbience && v.loop && v.sound == ambienceId)) v.fadeOut = FADE_OUT;   // fade out, no click
+        if (v.active && v.fadeOut < 0 && !(keepAmbience && v.loop)) v.fadeOut = FADE_OUT;   // fade out, no click (looping background sounds are kept when keepAmbience is set)
     SDL_UnlockAudioDevice(dev);
 }
 
