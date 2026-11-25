@@ -116,6 +116,8 @@ void buildInside() {
     INS[18] = {{CHAMBER, 0.30f, 1}, {NONE, 0, 0}, P(90, 0.6f, 16)}; INS[18].p.vote = true;
     INS[19] = {{PROTEST_STREET, 0.30f, 1}, {NONE, 0, 0}, P(72, 0.5f, 4)};
     INS[20] = {{POLLING, 0.28f, 1}, {NONE, 0, 0}, P(48, 0.2f, 11)};   INS[20].p.stations = 4;
+    // the 3D inside of every shot gets the SAME time of day as its 2D exterior (0 dawn, 1 day, 2 midday, 3 dusk, 4 night, 5 pre-dawn)
+    for (int i = 0; i < N; i++) { INS[i].p.sky = SHOTS[i].mood.sky; if (SHOTS[i].mood.sky == 4) INS[i].p.night = true; }
 }
 bool draw3D(int i, float local) {                          // returns true when this frame is a 3D one
     if (!hasInside(i)) return false;

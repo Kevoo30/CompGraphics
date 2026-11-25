@@ -135,6 +135,7 @@ static int runScene3D(int argc, char** argv) {
             if (!std::strcmp(argv[j], "smoke")) p.smoke = true; if (!std::strcmp(argv[j], "police")) p.police = true; if (!std::strcmp(argv[j], "night")) p.night = true;
             if (!std::strcmp(argv[j], "candles")) p.candles = true; if (!std::strcmp(argv[j], "mourning")) p.mourning = true; if (!std::strcmp(argv[j], "vote")) p.vote = true;
             if (!std::strcmp(argv[j], "results")) p.variant = 1;
+            if (!std::strncmp(argv[j], "sky=", 4)) p.sky = std::atoi(argv[j] + 4);
         }
     }
     render::init(800, 600, "scene3d");

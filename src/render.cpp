@@ -82,6 +82,7 @@ void init(int w, int h, const char* title) {
     W = w; H = h;
     if (SDL_Init(SDL_INIT_VIDEO) != 0) { std::printf("SDL_Init failed: %s\n", SDL_GetError()); return; }
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);            // 16-bit depth was the main cause of flicker (z-fighting) on the coat of arms and flags
     SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1);     // smooth edges (anti-aliasing)
     SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 4);
     window = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, W, H, SDL_WINDOW_OPENGL);

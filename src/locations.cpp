@@ -148,7 +148,7 @@ struct Look { Color skin, top, bottom, hair, sign; int hairStyle; bool dress; };
 enum ArmMode { ARM_DOWN, ARM_FIST, ARM_PLACARD, ARM_PHONE, ARM_CANDLE, ARM_BOTH_UP };
 
 Look makeLook(int id, int seed, const Mood& m) {
-    static const Color skin[5]   = {{141, 85, 36}, {198, 134, 66}, {94, 56, 30}, {70, 42, 24}, {165, 105, 55}};
+    static const Color skin[5]   = {{124, 74, 36}, {108, 64, 32}, {94, 56, 30}, {70, 42, 24}, {116, 69, 34}};
     static const Color top[10]   = {{40, 60, 110}, {150, 40, 40}, {50, 100, 65}, {90, 90, 100}, {170, 130, 45}, {70, 45, 100}, {205, 205, 208}, {35, 35, 40}, {200, 110, 40}, {60, 120, 150}};
     static const Color bottom[5] = {{35, 45, 80}, {30, 30, 34}, {62, 56, 50}, {48, 62, 92}, {25, 25, 28}};
     static const Color hair[3]   = {{20, 16, 14}, {36, 26, 18}, {56, 40, 28}};

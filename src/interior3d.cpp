@@ -85,9 +85,21 @@ void texInit() {
             px[(y * N + x) * 3] = (unsigned char)(255 * clamp01(r)); px[(y * N + x) * 3 + 1] = (unsigned char)(255 * clamp01(g)); px[(y * N + x) * 3 + 2] = (unsigned char)(255 * clamp01(b));
         }
         glGenTextures(1, &texId[k]); glBindTexture(GL_TEXTURE_2D, texId[k]);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameterf(GL_TEXTURE_2D, 0x84FE /*GL_TEXTURE_MAX_ANISOTROPY_EXT, ignored when unsupported*/, 4.0f);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, N, N, 0, GL_RGB, GL_UNSIGNED_BYTE, px);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        {   // build the whole mip chain by hand (works on any GL version)
+            std::vector<unsigned char> cur(px, px + N * N * 3); int sz = N;
+            for (int lvl = 0;; lvl++) {
+                glTexImage2D(GL_TEXTURE_2D, lvl, GL_RGB, sz, sz, 0, GL_RGB, GL_UNSIGNED_BYTE, cur.data());
+                if (sz == 1) break;
+                int ns = sz / 2; std::vector<unsigned char> nx(ns * ns * 3);
+                for (int y = 0; y < ns; y++) for (int x = 0; x < ns; x++) for (int ch = 0; ch < 3; ch++)
+                    nx[(y * ns + x) * 3 + ch] = (unsigned char)((cur[((2 * y) * sz + 2 * x) * 3 + ch] + cur[((2 * y) * sz + 2 * x + 1) * 3 + ch] + cur[((2 * y + 1) * sz + 2 * x) * 3 + ch] + cur[((2 * y + 1) * sz + 2 * x + 1) * 3 + ch]) / 4);
+                cur.swap(nx); sz = ns;
+            }
+        }
     }
 }
 void floorQuad(Tex k, float x0, float z0, float x1, float z1, float y, float rep, C tint = {1, 1, 1}) {
@@ -98,8 +110,31 @@ void floorQuad(Tex k, float x0, float z0, float x1, float z1, float y, float rep
     glEnd(); glDisable(GL_TEXTURE_2D);
 }
 
+// ------------------------------------------------------------------ time of day
+// One table drives sky, sun, ambient, window glow, street lamps and building brightness in EVERY 3D scene,
+// so a shot marked dawn / day / midday / dusk / night / pre-dawn looks that way inside as well as outside.
+struct Tod {
+    C sky, sun, amb, win;      // sky + fog colour, sun/moon light colour, ambient, light coming through windows and doors
+    V3 sunPos;                 // light position
+    float sunK;                // 0..1 how much direct sun reaches interiors (light shafts)
+    float ik;                  // interior exposure (rooms are lit by lamps but feel darker at night)
+    float lamps;               // 0..1 street lamps / floodlights / ceiling lamps on
+    float bld;                 // brightness of buildings
+    bool night;
+};
+Tod tod(int s) {
+    switch (s) {
+        case 0:  return {{.93f,.70f,.52f}, {1.0f,.74f,.50f}, {.40f,.37f,.40f}, {1.0f,.80f,.55f}, {35, 9, 24},  .60f, .90f, .4f, .90f, false};   // dawn: low warm sun
+        case 2:  return {{.62f,.78f,.96f}, {1.0f,.98f,.92f}, {.46f,.46f,.46f}, {1.0f,.98f,.90f}, {4, 60, 6},   1.0f, 1.0f, 0.f, 1.0f, false};   // harsh midday
+        case 3:  return {{.88f,.50f,.30f}, {1.0f,.56f,.30f}, {.37f,.29f,.31f}, {1.0f,.62f,.32f}, {-34, 9, 12}, .65f, .85f, .8f, .75f, false};   // dusk / evening: orange, lamps coming on
+        case 4:  return {{.03f,.04f,.09f}, {.40f,.44f,.62f}, {.17f,.19f,.30f}, {.08f,.12f,.25f}, {-8, 14, 8},  0.f,  .60f, 1.f, .35f, true };   // night: blue moonlight, lamps on
+        case 5:  return {{.24f,.29f,.50f}, {.42f,.47f,.68f}, {.25f,.27f,.37f}, {.35f,.45f,.70f}, {-20, 10, -10}, .10f, .70f, .8f, .50f, false};  // pre-dawn: deep blue
+        default: return {{.50f,.72f,.94f}, {1.0f,.96f,.85f}, {.50f,.50f,.50f}, {1.0f,.97f,.85f}, {20, 40, 20}, 1.0f, 1.0f, 0.f, 1.0f, false};   // day
+    }
+}
+
 // ------------------------------------------------------------------ camera, light, atmosphere
-void camera(V3 eye, V3 tgt, float fov, int W, int H, float nearP = 0.1f, float farP = 300.0f) {
+void camera(V3 eye, V3 tgt, float fov, int W, int H, float nearP = 0.25f, float farP = 250.0f) {
     glMatrixMode(GL_PROJECTION); glLoadIdentity();
     float top = nearP * std::tan(fov * PI / 360.0f); glFrustum(-top * W / H, top * W / H, -top, top, nearP, farP);
     glMatrixMode(GL_MODELVIEW); glLoadIdentity();
@@ -163,12 +198,13 @@ void puff(V3 p, float r, C c, float alpha) {              // one smoke blob: thr
 }
 
 // ------------------------------------------------------------------ people
-struct Look { C skin, top, bottom, hair; int kind; float h; };   // kind: 0 casual 1 robe 2 suit 3 police 4 dress 5 uniform 6 gown(lawyer) 7 hi-vis
-C skinTone(int id) { static const C s[5] = {{.55f,.33f,.14f},{.78f,.52f,.26f},{.37f,.22f,.12f},{.29f,.17f,.10f},{.65f,.41f,.21f}}; return s[int(hashf(id * 7 + 1) * 5) % 5]; }
+struct Look { C skin, top, bottom, hair; int kind; float h; bool female = false; };   // kind: 0 casual 1 robe 2 suit 3 police 4 dress 5 uniform 6 gown(lawyer) 7 hi-vis
+// One consistent family of dark-brown tones for everybody (the old palette included light tones, which made faces jump from scene to scene).
+C skinTone(int id) { static const C s[5] = {{.48f,.29f,.15f},{.41f,.25f,.13f},{.37f,.22f,.12f},{.29f,.17f,.10f},{.44f,.27f,.14f}}; return s[int(hashf(id * 7 + 1) * 5) % 5]; }
 Look makeLook(int id, int kind, bool dark = false) {
     static const C tops[10] = {{.16f,.24f,.43f},{.59f,.16f,.16f},{.2f,.4f,.25f},{.35f,.35f,.4f},{.67f,.51f,.18f},{.27f,.18f,.4f},{.8f,.8f,.82f},{.14f,.14f,.16f},{.78f,.43f,.16f},{.24f,.47f,.59f}};
     static const C bots[5] = {{.14f,.18f,.31f},{.12f,.12f,.14f},{.25f,.22f,.2f},{.19f,.24f,.36f},{.1f,.1f,.11f}};
-    Look L; L.skin = skinTone(id); L.kind = kind; L.h = 0.94f + 0.12f * hashf(id * 3 + 2);
+    Look L; L.skin = skinTone(id); L.kind = kind; L.h = 0.94f + 0.12f * hashf(id * 3 + 2); L.female = (kind == 4) || hashf(id * 23) < 0.18f;
     L.top = dark ? (hashf(id * 5) < 0.7f ? C{.1f,.1f,.12f} : C{.8f,.8f,.82f}) : tops[int(hashf(id * 11 + 4) * 10) % 10];
     L.bottom = bots[int(hashf(id * 13 + 6) * 5) % 5];
     L.hair = hashf(id * 17) < 0.1f ? C{.55f,.55f,.56f} : C{.07f,.055f,.05f};
@@ -182,11 +218,18 @@ Look makeLook(int id, int kind, bool dark = false) {
     }
     return L;
 }
-Look presidentLook(int id) {
-    Look L = makeLook(id, 2);
-    L.skin = {.29f, .17f, .10f};
+// Recurring characters have ONE fixed look, whatever scene or time of day they appear in.
+// The president is always dark-skinned, in the same navy suit, with short black hair.
+const C PRESIDENT_SKIN = {.24f, .14f, .085f};
+Look presidentLook(int /*unused: kept so every call site draws the same man*/ = 0) {
+    Look L = makeLook(9001, 2);
+    L.skin = PRESIDENT_SKIN; L.top = L.bottom = {.07f, .09f, .17f}; L.hair = {.05f, .045f, .045f}; L.h = 1.0f; L.female = false;
     return L;
 }
+Look chiefJusticeLook() { Look L = makeLook(9002, 1); L.skin = {.33f, .20f, .11f}; L.hair = {.45f, .45f, .47f}; L.h = 1.0f; L.female = false; return L; }
+Look speakerLook()      { Look L = makeLook(9003, 1); L.skin = {.31f, .19f, .11f}; L.hair = {.9f, .9f, .92f};    L.h = 1.0f; L.female = false; return L; }
+
+void decalBegin(float n); void decalEnd(); void kenyaShield(float x, float y, float z, float w, float h, float g, bool detail);
 
 // arm poses: 0 down  1 raised fist  2 placard  3 writing / hands forward  4 oath (right hand up, left on book)
 //            5 clapping  6 phone  7 hand raised (voting)  8 speaking gesture  9 candle  10 riot shield  11 salute
@@ -209,12 +252,8 @@ void person(float x, float y, float z, float yaw, const Look& L, float ph, float
     col(L.top); box(0, hip + 0.3f, 0, 0.4f, 0.6f, 0.22f);
     if (L.kind == 1) { col({.62f, .08f, .1f}); box(0, hip + 0.45f, 0.115f, 0.1f, 0.4f, 0.02f); box(0, hip + 0.56f, 0.115f, 0.3f, 0.05f, 0.02f); }          // red sash
     if (L.kind == 3 || L.kind == 5) {
-        // Uniform shield for police and ceremonial guards, echoing the Kenyan coat of arms.
-        col({.92f, .9f, .82f}); box(-0.1f, hip + 0.43f, 0.12f, 0.14f, 0.22f, 0.025f);
-        col({.04f, .04f, .05f}); box(-0.1f, hip + 0.49f, 0.137f, 0.11f, 0.065f, 0.012f);
-        col({.72f, .08f, .11f}); box(-0.1f, hip + 0.43f, 0.137f, 0.11f, 0.055f, 0.012f);
-        col({.08f, .32f, .15f}); box(-0.1f, hip + 0.37f, 0.137f, 0.11f, 0.055f, 0.012f);
-        col({.95f, .92f, .82f}); box(-0.1f, hip + 0.46f, 0.15f, 0.11f, 0.009f, 0.008f); box(-0.1f, hip + 0.40f, 0.15f, 0.11f, 0.009f, 0.008f);
+        // Chest badge = the same Kenya shield drawn on the coat of arms and the flag (black top, red middle, green bottom, white fimbriation).
+        decalBegin(1.0f); kenyaShield(-0.1f, hip + 0.43f, 0.118f, 0.13f, 0.24f, 0.0016f, false); decalEnd();
     }
     if (L.kind == 6) { col({.95f, .95f, .95f}); box(-0.03f, hip + 0.55f, 0.115f, 0.05f, 0.14f, 0.02f); box(0.03f, hip + 0.55f, 0.115f, 0.05f, 0.14f, 0.02f); }  // white bands
     if (L.kind == 2) { col({.95f, .95f, .95f}); box(0, hip + 0.5f, 0.115f, 0.1f, 0.2f, 0.02f); col({.55f, .08f, .1f}); box(0, hip + 0.45f, 0.125f, 0.04f, 0.3f, 0.02f); }
@@ -260,13 +299,20 @@ void person(float x, float y, float z, float yaw, const Look& L, float ph, float
     // head
     float hd = hip + 0.76f;
     col(L.skin); box(0, hip + 0.64f, 0, 0.09f, 0.1f, 0.09f);
-    ell(0, hd, 0.01f, 0.115f, 0.135f, 0.12f, 10);
-    col({.04f, .03f, .03f}); box(-0.04f, hd + 0.02f, 0.115f, 0.025f, 0.015f, 0.01f); box(0.04f, hd + 0.02f, 0.115f, 0.025f, 0.015f, 0.01f);
+    ell(0, hd, 0.01f, 0.115f, 0.135f, 0.12f, 14);
     col(L.hair);
     if (L.kind == 3) { col({.08f, .12f, .26f}); ell(0, hd + 0.06f, 0.0f, 0.125f, 0.09f, 0.13f, 8); box(0, hd + 0.03f, 0.12f, 0.2f, 0.02f, 0.08f); }
     else if (L.kind == 5) { col({.035f, .035f, .04f}); ell(0, hd + 0.07f, 0.0f, 0.125f, 0.075f, 0.13f, 8); }
-    else if (L.kind == 4 || hashf(id * 23) < 0.18f) { ell(0, hd + 0.03f, -0.02f, 0.14f, 0.15f, 0.13f, 8); col(L.skin); ell(0, hd - 0.01f, 0.05f, 0.1f, 0.115f, 0.085f, 8); }
+    else if (L.female) { ell(0, hd + 0.03f, -0.02f, 0.14f, 0.15f, 0.13f, 8); col(L.skin); ell(0, hd - 0.01f, 0.05f, 0.1f, 0.115f, 0.085f, 8); }
     else ell(0, hd + 0.075f, -0.005f, 0.12f, 0.075f, 0.125f, 8);
+    // face: same layout on every person (eyes, brows, nose, mouth, ears), drawn after the hair so it is always visible
+    { float fz = L.female ? 0.138f : 0.126f;
+      col({.97f, .96f, .93f}); box(-0.04f, hd + 0.02f, fz, 0.034f, 0.016f, 0.006f); box(0.04f, hd + 0.02f, fz, 0.034f, 0.016f, 0.006f);      // eye whites
+      col({.03f, .02f, .02f}); box(-0.04f, hd + 0.02f, fz + 0.004f, 0.016f, 0.014f, 0.006f); box(0.04f, hd + 0.02f, fz + 0.004f, 0.016f, 0.014f, 0.006f);
+      col(L.kind == 3 || L.kind == 5 ? C{.03f, .03f, .035f} : L.hair); box(-0.04f, hd + 0.05f, fz, 0.04f, 0.009f, 0.006f); box(0.04f, hd + 0.05f, fz, 0.04f, 0.009f, 0.006f);   // brows
+      col(scalec(L.skin, 0.86f)); box(0, hd - 0.012f, fz + 0.008f, 0.026f, 0.044f, 0.024f);                                                   // nose
+      col({.22f, .08f, .07f}); box(0, hd - 0.06f, fz - 0.004f, 0.05f, 0.009f, 0.006f);                                                       // mouth
+      col(L.skin); ell(-0.115f, hd, 0.0f, 0.016f, 0.034f, 0.024f, 6); ell(0.115f, hd, 0.0f, 0.016f, 0.034f, 0.024f, 6); }
     glPopMatrix();
 }
 void chair(float x, float y, float z, float yaw, C c, float back = 0.9f) {
@@ -275,38 +321,123 @@ void chair(float x, float y, float z, float yaw, C c, float back = 0.9f) {
     col(scalec(c, 0.5f)); for (int i = 0; i < 4; i++) box((i % 2 ? 1 : -1) * 0.22f, 0.22f, (i < 2 ? 1 : -1) * 0.22f, 0.05f, 0.44f, 0.05f);
     glPopMatrix();
 }
-void flag3(float x, float y, float z, float w, float t, float seed) {   // Kenyan flag: black, red, green with white fimbriation, waving
-    static const C bands[5] = {{.05f, .05f, .05f}, {.95f, .95f, .95f}, {.75f, .1f, .1f}, {.95f, .95f, .95f}, {.05f, .45f, .2f}};
-    static const float hh[5] = {0.27f, 0.04f, 0.38f, 0.04f, 0.27f};
-    float h = w * 0.66f, yy = y;
-    for (int k = 0; k < 5; k++) {
-        float bh = h * hh[k];
-        for (int i = 0; i < 6; i++) {
-            float xx = x + (i + 0.5f) * w / 6, wave = std::sin(t * 2.2f + i * 0.9f + seed) * 0.05f * (i + 1) / 6 * w;
-            col(k == 4 ? bands[4] : bands[k]); box(xx, yy - bh / 2, z + wave, w / 6 + 0.01f, bh, 0.02f);
-        }
-        yy -= bh;
-    }
-    col({.7f, .1f, .1f}); ell(x + w / 2, y - h / 2, z, w * 0.07f, h * 0.2f, 0.03f, 8);
-    col({.4f, .4f, .42f}); box(x - 0.03f, y - h / 2 - 0.5f, z, 0.06f, h + 1.4f, 0.06f);
+// ---- flat decal helpers: every emblem layer is a flat plate with a REAL gap to the layer below + a polygon offset,
+//      so nothing is ever coplanar or intersecting (that was the flicker while the camera turned).
+void decalBegin(float n) { glEnable(GL_POLYGON_OFFSET_FILL); glPolygonOffset(-n, -2.0f * n); }
+void decalEnd()          { glDisable(GL_POLYGON_OFFSET_FILL); }
+void disc2(float cx, float cy, float z, float a, float b, C c, int seg = 18, float rotDeg = 0.0f) {
+    float cr = std::cos(rotDeg * PI / 180.0f), sr = std::sin(rotDeg * PI / 180.0f);
+    glNormal3f(0, 0, 1); col(c); glBegin(GL_TRIANGLE_FAN); glVertex3f(cx, cy, z);
+    for (int i = 0; i <= seg; i++) { float an = i * 2 * PI / seg, px = std::cos(an) * a, py = std::sin(an) * b; glVertex3f(cx + px * cr - py * sr, cy + px * sr + py * cr, z); }
+    glEnd();
 }
+void quad2(float z, C c, float x0, float y0, float x1, float y1, float x2, float y2, float x3, float y3) {
+    glNormal3f(0, 0, 1); col(c); glBegin(GL_QUADS); glVertex3f(x0, y0, z); glVertex3f(x1, y1, z); glVertex3f(x2, y2, z); glVertex3f(x3, y3, z); glEnd();
+}
+void bar2(float z, C c, float x0, float y0, float x1, float y1, float wd) {      // thick line from (x0,y0) to (x1,y1)
+    float dx = x1 - x0, dy = y1 - y0, l = std::sqrt(dx * dx + dy * dy); if (l < 1e-6f) return; float nx = -dy / l * wd * 0.5f, ny = dx / l * wd * 0.5f;
+    quad2(z, c, x0 + nx, y0 + ny, x1 + nx, y1 + ny, x1 - nx, y1 - ny, x0 - nx, y0 - ny);
+}
+float shieldHalfW(float v) { float cc = std::cos(clamp01(std::fabs(v)) * PI * 0.5f); return std::pow(cc, 0.5f); }       // v in -1..1 up the shield: 1 in the middle, 0 at the tips
+void shieldBand(float x, float y, float z, float w, float h, float v0, float v1, C c, float inset) {
+    const int N = 10; glNormal3f(0, 0, 1); col(c); glBegin(GL_QUAD_STRIP);
+    for (int i = 0; i <= N; i++) { float v = v0 + (v1 - v0) * i / N, hw = std::max(0.0f, shieldHalfW(v) * 0.5f * w - inset), yy = y + v * 0.5f * h; glVertex3f(x - hw, yy, z); glVertex3f(x + hw, yy, z); }
+    glEnd();
+}
+// THE Kenya shield, used by the wall coat of arms and by the guards' and police chest badges, so it is identical in every scene:
+// black (top), red (middle), green (bottom), separated and framed by white fimbriation. (x, y) = centre, z = back layer, g = gap between layers.
+// With detail = true the red band carries the cockerel holding an axe.
+void kenyaShield(float x, float y, float z, float w, float h, float g, bool detail) {
+    const C white = {.95f, .94f, .90f}, black = {.04f, .04f, .05f}, red = {.74f, .08f, .10f}, green = {.06f, .40f, .18f};
+    float ins = w * 0.05f;
+    shieldBand(x, y, z, w, h, -1.0f, 1.0f, white, 0);                          // white rim, also shows between the bands
+    shieldBand(x, y, z + g, w, h,  0.37f,  1.0f, black, ins);                  // black (top)
+    shieldBand(x, y, z + g, w, h, -0.27f,  0.27f, red,   ins);                 // red (middle)
+    shieldBand(x, y, z + g, w, h, -1.0f, -0.37f, green, ins);                  // green (bottom)
+    if (!detail) return;
+    float s = h * 0.10f, z2 = z + 2 * g, z3 = z + 3 * g; const C gold = {.92f, .72f, .2f};
+    disc2(x - s * 0.55f, y + s * 0.35f, z2, s * 0.25f, s * 0.6f, white, 10, 20.0f);        // tail
+    disc2(x, y - s * 0.1f, z2, s * 0.6f, s * 0.75f, white, 14);                             // body
+    disc2(x + s * 0.15f, y + s * 0.85f, z2, s * 0.25f, s * 0.28f, white, 12);               // head
+    disc2(x + s * 0.12f, y + s * 1.15f, z2, s * 0.1f, s * 0.12f, gold, 8);                  // comb
+    disc2(x + s * 0.42f, y + s * 0.88f, z2, s * 0.1f, s * 0.05f, gold, 6);                  // beak
+    bar2(z2, {.45f, .30f, .15f}, x + s * 0.45f, y - s * 0.6f, x + s * 0.8f, y + s * 0.6f, s * 0.07f);      // axe handle
+    quad2(z3, {.75f, .76f, .8f}, x + s * 0.72f, y + s * 0.5f, x + s * 1.1f, y + s * 0.62f, x + s * 1.1f, y + s * 0.9f, x + s * 0.76f, y + s * 0.82f);   // axe head
+    disc2(x + s * 0.18f, y + s * 0.9f, z3, s * 0.04f, s * 0.04f, black, 6);                 // eye
+}
+void spear(float x0, float y0, float x1, float y1, float z, float wd) {
+    float dx = x1 - x0, dy = y1 - y0, l = std::sqrt(dx * dx + dy * dy); dx /= l; dy /= l;
+    bar2(z, {.45f, .30f, .15f}, x0, y0, x1, y1, wd);
+    quad2(z, {.82f, .82f, .85f}, x1 - dy * wd * 1.4f, y1 + dx * wd * 1.4f, x1 + dy * wd * 1.4f, y1 - dx * wd * 1.4f, x1 + dx * wd * 5.0f, y1 + dy * wd * 5.0f, x1 + dx * wd * 5.0f, y1 + dy * wd * 5.0f);
+}
+void lion(float x, float y, float z, float r, float s, float g) {            // flat gold supporter facing the shield (s = -1 left, +1 right)
+    const C gold = {.84f, .64f, .18f}, dark = {.62f, .45f, .12f};
+    float cx = x + s * 1.0f * r;
+    disc2(cx, y + 0.42f * r, z, 0.25f * r, 0.27f * r, dark, 14);                                               // mane
+    disc2(cx, y - 0.25f * r, z + g, 0.26f * r, 0.55f * r, gold, 16, -s * 10.0f);                               // body
+    bar2(z + g, gold, cx - s * 0.1f * r, y - 0.5f * r, cx - s * 0.14f * r, y - 1.0f * r, 0.11f * r);           // hind legs
+    bar2(z + g, gold, cx + s * 0.1f * r, y - 0.5f * r, cx + s * 0.16f * r, y - 1.0f * r, 0.11f * r);
+    bar2(z + g, gold, cx - s * 0.12f * r, y + 0.12f * r, cx - s * 0.47f * r, y + 0.35f * r, 0.09f * r);        // raised paw towards the shield
+    bar2(z + g, dark, cx + s * 0.2f * r, y - 0.45f * r, cx + s * 0.42f * r, y + 0.1f * r, 0.05f * r);          // tail
+    disc2(cx + s * 0.42f * r, y + 0.13f * r, z + g, 0.07f * r, 0.09f * r, dark, 8);
+    disc2(cx - s * 0.04f * r, y + 0.45f * r, z + 2 * g, 0.16f * r, 0.18f * r, gold, 14);                       // head
+    disc2(cx - s * 0.1f * r, y + 0.5f * r, z + 3 * g, 0.025f * r, 0.025f * r, {.05f, .04f, .03f}, 6);        // eye
+}
+void flag3(float x, float y, float z, float w, float t, float seed) {   // identical design to the 2D flag in locations.cpp, waving
+    const int NX = 24, NY = 30; const float h = w * 46.0f / 74.0f;       // same 74:46 proportions as the outside flags
+    auto waveAt = [&](float u) { return std::sin(t * 2.2f + u * 5.4f + seed) * 0.05f * w * (0.15f + u); };   // pinned at the pole, free at the fly
+    auto flagColor = [&](float u, float v) -> C {
+        const C white = {.93f, .93f, .93f};
+        float dx = (u - 0.5f) * w, dy = (v - 0.5f) * h;
+        float sa = dx / (0.18f * w), sb = dy / (0.30f * h);                 // crossed white spears: the two diagonals of the 2D flag
+        if (std::fabs(sa) <= 1.0f && std::fabs(std::fabs(sa) - std::fabs(sb)) < 0.09f) return white;
+        float e = (dx * dx) / (0.10f * w * 0.10f * w) + (dy * dy) / (0.30f * h * 0.30f * h);
+        if (e <= 1.0f) return e > 0.78f ? white : C{.76f, .11f, .11f};      // shield: red with white outline
+        if (v < 0.27f) return {.05f, .05f, .05f};                           // black
+        if (v < 0.31f) return white;
+        if (v < 0.69f) return {.67f, .09f, .09f};                           // red
+        if (v < 0.73f) return white;
+        return {.08f, .45f, .20f};                                          // green
+    };
+    for (int j = 0; j < NY; j++) for (int i = 0; i < NX; i++) {             // one continuous cloth mesh: no overlapping boxes, no seams
+        float u0 = (float)i / NX, u1 = (float)(i + 1) / NX, v0 = (float)j / NY, v1 = (float)(j + 1) / NY;
+        float dz = (waveAt(u1) - waveAt(u0)) / (w / NX); V3 n = norm({-dz, 0, 1});
+        col(flagColor((u0 + u1) * 0.5f, (v0 + v1) * 0.5f)); glNormal3f(n.x, n.y, n.z);
+        glBegin(GL_QUADS);
+        glVertex3f(x + u0 * w, y - v0 * h, z + waveAt(u0)); glVertex3f(x + u1 * w, y - v0 * h, z + waveAt(u1));
+        glVertex3f(x + u1 * w, y - v1 * h, z + waveAt(u1)); glVertex3f(x + u0 * w, y - v1 * h, z + waveAt(u0));
+        glEnd();
+    }
+    col({.4f, .4f, .42f}); box(x - 0.03f, y - h / 2 - 0.5f, z, 0.06f, h + 1.4f, 0.06f);
+    col({.84f, .70f, .27f}); ell(x - 0.03f, y + 0.26f, z, 0.07f, 0.07f, 0.07f, 8);                  // gold ball on top, like the outside poles
+}
+// The wall coat of arms: dark plaque, Mount Kenya, crossed spears, two lions, scroll, and the black/red/green shield with the cockerel.
+// (x, y) = centre of the shield, r = overall scale. All layers are flat plates stacked with real gaps (see decalBegin).
 void coatOfArms(float x, float y, float z, float r) {
-    col({.82f, .65f, .2f}); ell(x, y, z, r, r, 0.04f, 18);
-    col({.7f, .1f, .1f}); ell(x, y, z + 0.04f, r * 0.62f, r * 0.8f, 0.03f, 14);
-    col({.95f, .95f, .95f}); box(x, y, z + 0.08f, r * 0.12f, r * 1.5f, 0.02f);
-    col({.9f, .9f, .9f}); for (int s = -1; s <= 1; s += 2) { glPushMatrix(); glTranslatef(x, y, z + 0.06f); glRotatef(s * 18.0f, 0, 0, 1); box(s * r * 0.9f, 0, 0, 0.04f, r * 2.0f, 0.02f); glPopMatrix(); }
+    float g = r * 0.014f; decalBegin(1.0f);
+    disc2(x, y - 0.1f * r, z, 1.45f * r, 1.75f * r, {.09f, .08f, .07f}, 30);                                           // plaque
+    disc2(x, y - 1.55f * r, z + g, 1.15f * r, 0.2f * r, {.25f, .30f, .18f}, 24);                                       // Mount Kenya compartment
+    disc2(x, y - 1.5f * r, z + 2 * g, 0.3f * r, 0.12f * r, {.9f, .9f, .92f}, 12);                                       // snow cap
+    spear(x - 0.65f * r, y - 1.15f * r, x + 0.5f * r, y + 1.25f * r, z + g, 0.05f * r);                                 // crossed spears behind the shield
+    spear(x + 0.65f * r, y - 1.15f * r, x - 0.5f * r, y + 1.25f * r, z + g, 0.05f * r);
+    lion(x, y, z + g, r, -1.0f, g); lion(x, y, z + g, r, 1.0f, g);
+    quad2(z + 2 * g, {.9f, .84f, .65f}, x - 1.15f * r, y - 1.28f * r, x + 1.15f * r, y - 1.28f * r, x + 1.15f * r, y - 1.0f * r, x - 1.15f * r, y - 1.0f * r);   // scroll
+    for (int k = 0; k < 9; k++) quad2(z + 3 * g, {.25f, .12f, .1f}, x - 0.9f * r + k * 0.225f * r, y - 1.2f * r, x - 0.8f * r + k * 0.225f * r, y - 1.2f * r, x - 0.8f * r + k * 0.225f * r, y - 1.08f * r, x - 0.9f * r + k * 0.225f * r, y - 1.08f * r);
+    kenyaShield(x, y, z + 4 * g, 1.05f * r, 1.6f * r, g, true);
+    decalEnd();
 }
 void lightPanel(float x, float y, float z, float w, float d, C c) {
     glDisable(GL_LIGHTING); col(c); box(x, y, z, w, 0.05f, d); glEnable(GL_LIGHTING);
 }
-void wallWindow(float x, float y, float z, float w, float h, bool alongX) {
-    glDisable(GL_LIGHTING); col({1.0f, .97f, .85f}); if (alongX) box(x, y, z, w, h, 0.05f); else box(x, y, z, 0.05f, h, w); glEnable(GL_LIGHTING);
+void wallWindow(float x, float y, float z, float w, float h, bool alongX, C wc = {1.0f, .97f, .85f}) {
+    glDisable(GL_LIGHTING); col(wc); if (alongX) box(x, y, z, w, h, 0.05f); else box(x, y, z, 0.05f, h, w); glEnable(GL_LIGHTING);
 }
 
 // ================================================================== COURT: inside the Supreme Court
 void sceneCourt(float t, float u, const Params& p, int W, int H) {
-    begin(W, H, {.05f, .04f, .04f}, {.34f, .30f, .26f}, false, {0, 0, 0}, 0, 0);
-    light(0, {0, 6.4f, -3}, {.95f, .86f, .7f}); light(1, {0, 3.0f, 12}, {.35f, .38f, .45f});
+    Tod d = tod(p.sky);
+    begin(W, H, {.05f, .04f, .04f}, scalec({.34f, .30f, .26f}, d.ik), false, {0, 0, 0}, 0, 0);
+    light(0, {0, 6.4f, -3}, scalec({.95f, .86f, .7f}, mixf(1.0f, d.ik, 0.5f))); light(1, {0, 3.0f, 12}, scalec(mixc({.35f, .38f, .45f}, d.sun, 0.5f), 0.75f));
     V3 eye, tgt;
     if (u < 0.5f)       { float v = smooth(u * 2); eye = {mixf(-2.0f, 0.5f, v), mixf(2.9f, 2.5f, v), mixf(11.6f, 6.0f, v)}; tgt = {0, 2.3f, -9}; }
     else if (u < 0.78f) { float v = (u - 0.5f) / 0.28f; eye = {mixf(-4.4f, -2.2f, v), 1.55f, mixf(-0.8f, -3.2f, v)}; tgt = {mixf(-2.0f, 2.0f, v), 2.1f, -8.8f}; }
@@ -317,9 +448,9 @@ void sceneCourt(float t, float u, const Params& p, int W, int H) {
     boxc(wood, -8, 3.5f, 0, 0.3f, 7, 25); boxc(wood, 8, 3.5f, 0, 0.3f, 7, 25); boxc(wood, 0, 3.5f, -12.2f, 16.6f, 7, 0.3f); boxc(wood, 0, 3.5f, 12.7f, 16.6f, 7, 0.3f);
     boxc({.85f, .82f, .75f}, 0, 7.1f, 0, 16.6f, 0.3f, 25);
     for (int i = 0; i < 12; i++) { boxc(dark, -7.8f, 1.7f, -11 + i * 2.0f, 0.12f, 3.4f, 0.45f); boxc(dark, 7.8f, 1.7f, -11 + i * 2.0f, 0.12f, 3.4f, 0.45f); }
-    boxc(dark, 0, 0.1f, -12.0f, 16, 0.2f, 0.1f);
+    boxc(dark, 0, 0.1f, -11.96f, 16, 0.2f, 0.1f);
     for (int i = 0; i < 4; i++) { lightPanel(-4.5f + (i % 2) * 9.0f, 6.9f, -7.0f + (i / 2) * 11.0f, 1.8f, 1.0f, {1, .96f, .85f}); }
-    for (int i = 0; i < 4; i++) wallWindow(7.8f, 5.3f, -8 + i * 5.0f, 2.2f, 1.6f, false);
+    for (int i = 0; i < 4; i++) wallWindow(7.8f, 5.3f, -8 + i * 5.0f, 2.2f, 1.6f, false, d.win);
     coatOfArms(0, 4.9f, -11.9f, 1.15f);
     flag3(-6.4f, 5.6f, -11.6f, 2.2f, t, 0); flag3(4.2f, 5.6f, -11.6f, 2.2f, t, 1);
     // the bench: platform, long desk, seven high-backed chairs, seven judges
@@ -329,7 +460,7 @@ void sceneCourt(float t, float u, const Params& p, int W, int H) {
         float x = -4.5f + k * 1.5f;
         chair(x, 0.5f, -9.6f, 0, {.38f, .06f, .09f}, 1.35f);
         boxc({.95f, .95f, .95f}, x, 1.35f, -7.77f, 0.4f, 0.1f, 0.02f);
-        Look L = makeLook(100 + k, 1);
+        Look L = (k == 3) ? chiefJusticeLook() : makeLook(100 + k, 1);
         person(x, 0.5f, -9.35f, 0, L, 0, 0, (k == 3 && std::fmod(t, 9.0f) > 3.5f) ? 8 : 3, true, t, 100 + k);
     }
     // clerks, advocates' lecterns and tables
@@ -354,15 +485,16 @@ void sceneCourt(float t, float u, const Params& p, int W, int H) {
     }
     for (int s = -1; s <= 1; s += 2) person(s * 6.6f, 0, 1.2f, s > 0 ? -PI / 2 : PI / 2, makeLook(300 + s, 3), 0, 0, 0, false, t, 300);     // court guards at the doors
     // morning light through the windows and floating dust
-    for (int i = 0; i < 4; i++) { float z = -8 + i * 5.0f; shaft({7.7f, 6.1f, z - 0.9f}, {7.7f, 4.5f, z + 0.9f}, {2.5f, 0.0f, z - 3.2f}, {1.5f, 0.0f, z - 1.4f}, {1, .9f, .6f}, 0.16f); }
+    if (d.sunK > 0.05f) for (int i = 0; i < 4; i++) { float z = -8 + i * 5.0f; shaft({7.7f, 6.1f, z - 0.9f}, {7.7f, 4.5f, z + 0.9f}, {2.5f, 0.0f, z - 3.2f}, {1.5f, 0.0f, z - 1.4f}, d.win, 0.16f * d.sunK); }
     dust({2, 3, -3}, {10, 5, 14}, t, 70, 3);
     end2D(W, H);
 }
 
 // ================================================================== CHAMBER: inside Parliament (green benches, Speaker, Mace, galleries)
 void sceneChamber(float t, float u, const Params& p, int W, int H) {
-    begin(W, H, {.05f, .05f, .05f}, {.32f, .31f, .28f}, false, {0, 0, 0}, 0, 0);
-    light(0, {0, 8.2f, 0}, {.95f, .9f, .78f}); light(1, {0, 3.5f, 14}, {.3f, .32f, .38f});
+    Tod d = tod(p.sky);
+    begin(W, H, {.05f, .05f, .05f}, scalec({.32f, .31f, .28f}, d.ik), false, {0, 0, 0}, 0, 0);
+    light(0, {0, 8.2f, 0}, scalec({.95f, .9f, .78f}, mixf(1.0f, d.ik, 0.5f))); light(1, {0, 3.5f, 14}, scalec(mixc({.3f, .32f, .38f}, d.sun, 0.5f), 0.75f));
     V3 eye, tgt;
     if (u < 0.4f)       { float v = smooth(u / 0.4f); eye = {mixf(-5.0f, 3.0f, v), mixf(5.6f, 4.4f, v), 12.0f}; tgt = {0, 1.2f, -6}; }              // from the public gallery, drifting across
     else if (u < 0.72f) { float v = (u - 0.4f) / 0.32f; eye = {mixf(-1.0f, -3.4f, v), 2.5f, mixf(3.0f, 0.0f, v)}; tgt = {mixf(4.5f, 5.5f, v), 1.7f, mixf(-3.0f, -6.0f, v)}; }  // along the benches
@@ -388,13 +520,13 @@ void sceneChamber(float t, float u, const Params& p, int W, int H) {
     chair(0, 1.2f, -12.8f, 0, {.3f, .08f, .08f}, 1.7f);
     for (int s = -1; s <= 1; s += 2) boxc(dark, s * 2.2f, 4.2f, -13.8f, 0.4f, 6.0f, 0.4f);
     boxc(dark, 0, 7.3f, -13.8f, 5.2f, 0.7f, 0.5f); coatOfArms(0, 5.3f, -14.2f, 1.1f);
-    { Look S = makeLook(500, 1); S.hair = {.9f, .9f, .92f}; person(0, 1.2f, -12.5f, 0, S, 0, 0, (std::fmod(t, 8.0f) > 4.0f) ? 8 : 3, true, t, 500);
+    { Look S = speakerLook(); person(0, 1.2f, -12.5f, 0, S, 0, 0, (std::fmod(t, 8.0f) > 4.0f) ? 8 : 3, true, t, 500);
       glPushMatrix(); glTranslatef(0, 2.3f, -12.5f); col({.9f, .9f, .92f}); ell(0, 0.1f, -0.01f, 0.15f, 0.16f, 0.15f, 8); glPopMatrix(); }       // the wig
     boxc(wood, 0, 0.8f, -8.7f, 3.6f, 1.0f, 1.3f); boxc(dark, 0, 1.33f, -8.7f, 3.8f, 0.08f, 1.5f);
     col({.85f, .68f, .22f}); box(0, 1.5f, -8.7f, 0.08f, 0.08f, 1.0f); ell(0, 1.52f, -8.2f, 0.16f, 0.16f, 0.16f, 8); ell(0, 1.52f, -9.2f, 0.1f, 0.1f, 0.1f, 6);     // the Mace
     for (int k = 0; k < 3; k++) person(-1.0f + k, 0, -9.7f, 0, makeLook(520 + k, 2), 0, 0, 3, true, t, 520 + k);
     // green benches facing each other, MPs seated (and rising to vote)
-    int seats = 0, want = std::min(p.crowd, 120);
+    int seats = 0, want = 1000;                          // full house: every seat is taken
     for (int row = 0; row < 5; row++) {
         for (int side = -1; side <= 1; side += 2) {
             float x = side * (3.6f + row * 1.55f), y = row * 0.42f;
@@ -403,12 +535,12 @@ void sceneChamber(float t, float u, const Params& p, int W, int H) {
     }
     // Fill matching positions on both sides before moving deeper into the chamber.
     for (int row = 0; row < 5; row++)
-        for (int k = 0; k < 14; k++)
+        for (int k = 0; k < 18; k++)
             for (int side = -1; side <= 1; side += 2) {
             if (seats >= want) continue;
             seats++;
             float x = side * (3.6f + row * 1.55f), y = row * 0.42f;
-            float z = -8.5f + k * 1.25f + (hashf(seats) - 0.5f) * 0.2f;
+            float z = -9.35f + k * 1.1f + (hashf(seats) - 0.5f) * 0.1f;
             float standAt = 0.15f + 0.8f * hashf(seats * 13 + 2);
             bool stand = p.vote && u > standAt && u < standAt + 0.35f;
             int arm = stand ? 7 : (hashf(seats * 17) < 0.1f ? 6 : (hashf(seats * 19) < 0.2f ? 3 : 0));
@@ -433,17 +565,17 @@ void tyrePile(float x, float z, float t, float seed) {
     glDisable(GL_LIGHTING); for (int k = 0; k < 4; k++) { float f = 0.7f + 0.3f * std::sin(t * 11 + k * 2.0f + seed); col({1.0f, 0.5f + 0.25f * f, 0.1f}); ell(x + (k - 1.5f) * 0.22f, 0.55f + 0.25f * f, z + std::sin(k + seed) * 0.2f, 0.16f, 0.4f * f, 0.16f, 6); } glEnable(GL_LIGHTING);
     for (int k = 0; k < 7; k++) { float age = std::fmod(t * 0.25f + k * 0.15f + seed, 1.0f); puff({x + age * 1.2f, 1.0f + age * 6.0f, z}, 0.7f + age * 2.2f, {.18f, .17f, .17f}, 0.4f * (1 - age)); }
 }
-void streetBuildings(float zEnd, float zStart, bool night, int seed) {
+void streetBuildings(float zEnd, float zStart, bool lit, float k, int seed) {
     for (int side = -1; side <= 1; side += 2) {
         float z = zStart;
         for (int i = 0; z > zEnd; i++) {
             float w = 7 + hashf(seed * 31 + i * 3 + side) * 6, h = 8 + hashf(seed * 17 + i * 5 + side) * 18, x = side * (8.0f + w / 2);
-            C c = mixc({.52f, .5f, .46f}, {.4f, .42f, .46f}, hashf(i * 7 + side + seed)); if (night) c = scalec(c, 0.35f);
+            C c = mixc({.52f, .5f, .46f}, {.4f, .42f, .46f}, hashf(i * 7 + side + seed)); c = scalec(c, k);
             boxc(c, x, h / 2, z - w / 2, w, h, w);
-            for (int r = 0; r < (int)(h / 2.6f); r++) for (int k = 0; k < 3; k++) {
-                bool lit = night && hashf(i * 101 + r * 13 + k * 7 + side) < 0.4f;
-                glDisable(GL_LIGHTING); col(lit ? C{1, .85f, .5f} : (night ? C{.08f, .1f, .16f} : C{.35f, .45f, .55f}));
-                box(side * (8.0f - 0.02f), 2.2f + r * 2.6f, z - (k + 0.8f) * w / 3.4f, 0.04f, 1.3f, 0.9f); glEnable(GL_LIGHTING);
+            for (int r = 0; r < (int)(h / 2.6f); r++) for (int kk = 0; kk < 3; kk++) {
+                bool on = lit && hashf(i * 101 + r * 13 + kk * 7 + side) < 0.4f;
+                glDisable(GL_LIGHTING); col(on ? C{1, .85f, .5f} : mixc(C{.08f, .1f, .16f}, C{.35f, .45f, .55f}, clamp01((k - 0.35f) / 0.65f)));
+                box(side * (8.0f - 0.02f), 2.2f + r * 2.6f, z - (kk + 0.8f) * w / 3.4f, 0.04f, 1.3f, 0.9f); glEnable(GL_LIGHTING);
             }
             z -= w + 0.4f;
         }
@@ -462,8 +594,10 @@ void matatu(float x, float z, float yaw, C body) {
 
 // ================================================================== POLLING: a polling station (streams, clerks, booths, ballot boxes, ink)
 void scenePolling(float t, float u, const Params& p, int W, int H) {
-    begin(W, H, {.62f, .78f, .94f}, {.62f, .6f, .56f}, true, {.7f, .8f, .92f}, 45, 120);
-    light(0, {8, 14, 14}, {1.0f, .95f, .82f}); light(1, {0, 3, -4}, {.38f, .36f, .33f});
+    Tod d = tod(p.sky);
+    begin(W, H, d.sky, mixc({.62f, .6f, .56f}, d.amb, 0.55f), true, d.sky, 45, 120);
+    light(0, d.sunPos, d.sun); light(1, {0, 3, -4}, scalec({.38f, .36f, .33f}, mixf(1.0f, d.ik, 0.5f)));
+    if (d.lamps > 0.3f) light(2, {0, 3.2f, 0}, scalec({.6f, .55f, .45f}, d.lamps), 0.03f);       // ceiling lamps on at dusk / night / before dawn
     V3 eye, tgt;
     if (u < 0.3f)       { float v = smooth(u / 0.3f); eye = {mixf(-6, -2, v), mixf(3.4f, 1.9f, v), mixf(20, 13.5f, v)}; tgt = {0, 1.4f, 6}; }
     else if (u < 0.58f) { float v = (u - 0.3f) / 0.28f; eye = {mixf(-0.5f, 1.0f, v), 2.1f, -6.8f}; tgt = {0, 1.3f, 9}; }
@@ -478,9 +612,10 @@ void scenePolling(float t, float u, const Params& p, int W, int H) {
     for (auto& s : segs) boxc(wall, (s[0] + s[1]) / 2, 1.8f, 9, s[1] - s[0], 3.6f, 0.25f);
     for (int i = 0; i < 4; i++) boxc(wall, -4.5f + i * 3.0f, 3.2f, 9, 2.2f, 0.8f, 0.25f);
     boxc(roof, 0, 3.75f, 0.5f, 13.4f, 0.2f, 18.5f); for (int i = 0; i < 8; i++) boxc({.25f, .22f, .2f}, 0, 3.55f, -7.5f + i * 2.3f, 12.4f, 0.14f, 0.18f);
-    for (int i = 0; i < 4; i++) { glDisable(GL_LIGHTING); col({1, .98f, .85f}); box(6.0f, 2.5f, -5 + i * 3.8f, 0.05f, 1.0f, 1.8f); box(-6.0f, 2.5f, -5 + i * 3.8f, 0.05f, 1.0f, 1.8f); glEnable(GL_LIGHTING); }
+    for (int i = 0; i < 4; i++) { glDisable(GL_LIGHTING); col(d.win); box(6.0f, 2.5f, -5 + i * 3.8f, 0.05f, 1.0f, 1.8f); box(-6.0f, 2.5f, -5 + i * 3.8f, 0.05f, 1.0f, 1.8f); glEnable(GL_LIGHTING); }
     // sunlight pouring through the four doorways
-    for (int i = 0; i < 4; i++) { float x = -4.5f + i * 3.0f; shaft({x - 0.9f, 3.2f, 9.0f}, {x + 0.9f, 3.2f, 9.0f}, {x - 1.4f + 1.0f, 0.0f, 3.5f}, {x + 1.4f + 1.0f, 0.0f, 3.5f}, {1, .95f, .75f}, 0.22f); }
+    if (d.sunK > 0.05f) for (int i = 0; i < 4; i++) { float x = -4.5f + i * 3.0f; shaft({x - 0.9f, 3.2f, 9.0f}, {x + 0.9f, 3.2f, 9.0f}, {x - 1.4f + 1.0f, 0.0f, 3.5f}, {x + 1.4f + 1.0f, 0.0f, 3.5f}, d.win, 0.22f * d.sunK); }
+    if (d.lamps > 0.3f) for (int i = 0; i < 4; i++) lightPanel(-4.5f + i * 3.0f, 3.45f, 0, 1.6f, 0.8f, scalec({1, .94f, .78f}, d.lamps));
     dust({0, 2, 3}, {11, 3, 11}, t, 70, 8);
     // posters on the back wall
     for (int i = 0; i < 6; i++) { boxc({.95f, .95f, .92f}, -5 + i * 2.0f, 2.6f, -7.95f, 1.0f, 0.7f, 0.02f); boxc(i % 2 ? C{.75f, .1f, .1f} : C{.1f, .45f, .22f}, -5 + i * 2.0f, 2.85f, -7.93f, 0.9f, 0.14f, 0.02f); }
@@ -530,9 +665,11 @@ void scenePolling(float t, float u, const Params& p, int W, int H) {
 // ================================================================== INAUGURATION / FUNERAL: the stadium
 void sceneStadium(float t, float u, const Params& p, int W, int H) {
     bool fun = p.mourning;
-    C sky = fun ? C{.52f, .56f, .62f} : C{.5f, .72f, .94f};
-    begin(W, H, sky, {.5f, .5f, .5f}, true, sky, 70, 190);
-    light(0, {20, 40, 20}, fun ? C{.8f, .8f, .82f} : C{1, .96f, .85f}); light(1, {-10, 10, -10}, {.35f, .38f, .45f});
+    Tod d = tod(p.sky);
+    C sky = fun ? mixc(d.sky, C{.55f, .57f, .62f}, 0.55f) : d.sky;                // funeral: overcast version of the same time of day
+    begin(W, H, sky, d.amb, true, sky, 70, 190);
+    light(0, d.sunPos, fun ? scalec(d.sun, 0.85f) : d.sun); light(1, {-10, 10, -10}, scalec({.35f, .38f, .45f}, mixf(1.0f, d.ik, 0.5f)));
+    if (d.lamps > 0.3f) light(2, {0, 28, 0}, scalec({.9f, .85f, .7f}, d.lamps), 0.0006f);      // floodlights
     V3 eye, tgt; float dz = -6.0f;
     if (u < 0.35f)      { float v = smooth(u / 0.35f); eye = {mixf(-30, -12, v), mixf(11, 5.5f, v), mixf(24, 16, v)}; tgt = {0, 1.8f, dz}; }
     else if (u < 0.7f)  { float v = (u - 0.35f) / 0.35f; eye = {mixf(1.5f, 0.6f, v), 1.9f, mixf(9, 3.0f, v)}; tgt = {0, 1.8f, dz}; }
@@ -583,33 +720,38 @@ void sceneStadium(float t, float u, const Params& p, int W, int H) {
         person(x, 0, 6.5f + row * 1.2f, PI / 2, makeLook(1300 + row * 10 + k, 5), t * 5.0f + k, 1.0f, 0, false, t, 1300 + k);
     }
     for (int s = -1; s <= 1; s += 2) for (int k = 0; k < 6; k++) person(s * 7.2f, 0, dz + 3.5f - k * 0.0f + k * 1.8f - 4, s > 0 ? -PI / 2 : PI / 2, makeLook(1400 + k + (s > 0 ? 8 : 0), 5), 0, 0, 11, false, t, 1400 + k);
+    if (d.lamps > 0.3f) for (int m = 0; m < 4; m++) {                              // floodlight masts when it is dusk or dark
+        float mx = (m % 2 ? 1 : -1) * 47.0f, mz = (m < 2 ? 1 : -1) * 30.0f;
+        boxc({.35f, .35f, .38f}, mx, 9, mz, 0.3f, 18, 0.3f); glDisable(GL_LIGHTING); col(scalec({1, .95f, .8f}, 0.6f + 0.4f * d.lamps)); box(mx, 18.3f, mz, 2.0f, 0.6f, 0.6f); glEnable(GL_LIGHTING);
+    }
     if (!fun && u > 0.5f) for (int k = 0; k < 4; k++) { float age = std::fmod(t * 0.5f + k * 0.7f, 2.8f) / 2.8f; puff({-14.0f + k * 1.5f + age * 2, 1.2f + age * 3.5f, 9.0f}, 0.8f + age * 2.6f, {.88f, .88f, .86f}, 0.5f * (1 - age)); }
     end2D(W, H);
 }
 
 // ================================================================== PROTEST: the street (and the road to Parliament)
 void sceneProtest(float t, float u, const Params& p, int W, int H, bool parliament) {
-    bool night = p.night;
-    C sky = night ? C{.03f, .04f, .09f} : (p.smoke ? C{.6f, .62f, .64f} : C{.62f, .75f, .9f});
-    begin(W, H, sky, night ? C{.3f, .32f, .45f} : C{.5f, .5f, .5f}, true, sky, night ? 25 : 30, night ? 80 : 95);
-    light(0, night ? V3{-8, 14, 8} : V3{12, 30, 14}, night ? C{.42f, .46f, .65f} : C{1, .95f, .82f}); light(1, {0, 4, 10}, night ? C{.2f, .16f, .12f} : C{.3f, .32f, .38f});
-    if (night) light(2, {0, 1.6f, -3}, {1.3f, .7f, .3f}, 0.012f);
+    Tod d = tod(p.night ? 4 : p.sky);
+    bool night = d.night, lampsOn = d.lamps > 0.5f;
+    C sky = p.smoke ? mixc(d.sky, C{.6f, .62f, .64f}, night ? 0.25f : 0.6f) : d.sky;
+    begin(W, H, sky, night ? C{.3f, .32f, .45f} : d.amb, true, sky, night ? 25 : 30, night ? 80 : 95);
+    light(0, d.sunPos, d.sun); light(1, {0, 4, 10}, night ? C{.2f, .16f, .12f} : scalec(mixc({.3f, .32f, .38f}, d.sun, 0.3f), 1.0f));
+    if (lampsOn) light(2, {0, 1.6f, -3}, scalec({1.3f, .7f, .3f}, d.lamps), 0.012f);                // burning tyres / street light glow
     float frontZ = parliament ? -12.5f : -14.0f;
     V3 eye, tgt;
     if (u < 0.4f)       { float v = smooth(u / 0.4f); eye = {mixf(-2.5f, 1.5f, v), mixf(2.6f, 2.2f, v), mixf(19, 15, v)}; tgt = {0, 1.8f, -10}; }            // behind the crowd, looking down the street
     else if (u < 0.75f) { float v = (u - 0.4f) / 0.35f; eye = {6.3f, 1.7f, mixf(8.0f, -4.0f, v)}; tgt = {0, 1.7f, mixf(0.0f, -10.0f, v)}; }                  // tracking along the edge of the march
     else                { float v = (u - 0.75f) / 0.25f; eye = {mixf(-6.0f, -5.4f, v), 1.9f, -4.5f}; tgt = {0, 1.9f, -17}; }                                // at the front, facing the line
     camera(eye + shake(t, 0.03f + 0.05f * p.energy, 1.7f), tgt, 60, W, H);
-    floorQuad(T_ASPHALT, -7.5f, -80, 7.5f, 30, 0, 0.3f, night ? C{.55f, .55f, .6f} : C{1, 1, 1});
+    floorQuad(T_ASPHALT, -7.5f, -80, 7.5f, 30, 0, 0.3f, scalec(C{1, 1, 1}, 0.55f + 0.45f * clamp01((d.bld - 0.35f) / 0.65f)));
     boxc({.55f, .55f, .52f}, -8.1f, 0.08f, -25, 1.8f, 0.16f, 110); boxc({.55f, .55f, .52f}, 8.1f, 0.08f, -25, 1.8f, 0.16f, 110);
     for (int i = 0; i < 14; i++) boxc({.9f, .9f, .85f}, 0, 0.02f, 24 - i * 7.0f, 0.18f, 0.02f, 3.0f);
     if (parliament) {                                                    // Parliament at the end of the road: block, columns, clock tower, iron fence
-        for (int side = -1; side <= 1; side += 2) { float z = 28; for (int i = 0; z > -14; i++) { float w = 7 + hashf(i + side * 9) * 4, h = 6 + hashf(i * 3 + side) * 8; boxc(night ? C{.18f, .18f, .2f} : C{.52f, .5f, .46f}, side * (8.0f + w / 2), h / 2, z - w / 2, w, h, w); z -= w + 0.5f; } }
-        boxc(night ? C{.3f, .3f, .32f} : C{.8f, .78f, .72f}, 0, 4, -34, 36, 8, 10); for (int i = 0; i < 9; i++) boxc(night ? C{.4f, .4f, .42f} : C{.9f, .88f, .82f}, -14 + i * 3.5f, 4, -28.8f, 0.7f, 8, 0.7f);
-        boxc(night ? C{.3f, .3f, .32f} : C{.85f, .82f, .76f}, 0, 11, -34, 4.5f, 16, 4.5f); col({.95f, .95f, .9f}); ell(0, 14, -31.6f, 1.1f, 1.1f, 0.1f, 14); boxc({.2f, .2f, .25f}, 0, 20, -34, 5.5f, 1.5f, 5.5f);
+        for (int side = -1; side <= 1; side += 2) { float z = 28; for (int i = 0; z > -14; i++) { float w = 7 + hashf(i + side * 9) * 4, h = 6 + hashf(i * 3 + side) * 8; boxc(scalec(C{.52f, .5f, .46f}, d.bld), side * (8.0f + w / 2), h / 2, z - w / 2, w, h, w); z -= w + 0.5f; } }
+        boxc(scalec(C{.8f, .78f, .72f}, d.bld), 0, 4, -34, 36, 8, 10); for (int i = 0; i < 9; i++) boxc(scalec(C{.9f, .88f, .82f}, d.bld), -14 + i * 3.5f, 4, -28.8f, 0.7f, 8, 0.7f);
+        boxc(scalec(C{.85f, .82f, .76f}, d.bld), 0, 11, -34, 4.5f, 16, 4.5f); col({.95f, .95f, .9f}); ell(0, 14, -31.6f, 1.1f, 1.1f, 0.1f, 14); boxc({.2f, .2f, .25f}, 0, 20, -34, 5.5f, 1.5f, 5.5f);
         for (int i = 0; i < 40; i++) boxc({.1f, .1f, .12f}, -9.5f + i * 0.5f, 1.2f, -16, 0.05f, 2.4f, 0.05f); boxc({.1f, .1f, .12f}, 0, 2.3f, -16, 20, 0.08f, 0.08f); boxc({.1f, .1f, .12f}, 0, 0.3f, -16, 20, 0.08f, 0.08f);
-    } else streetBuildings(-60, 28, night, p.seed);
-    for (int i = 0; i < 6; i++) { lampPost(-7.2f, 20 - i * 10.0f, night); lampPost(7.2f, 15 - i * 10.0f, night); }
+    } else streetBuildings(-60, 28, lampsOn, d.bld, p.seed);
+    for (int i = 0; i < 6; i++) { lampPost(-7.2f, 20 - i * 10.0f, lampsOn); lampPost(7.2f, 15 - i * 10.0f, lampsOn); }
     matatu(6.5f, 20.0f, 0.0f, {.2f, .55f, .3f}); matatu(-6.5f, 4.0f, 0.0f, {.85f, .85f, .88f});
     // the crowd walks forward and gathers at the police line / fence
     int n = std::min(p.crowd, 110); bool vigil = p.candles;
@@ -651,8 +793,9 @@ void sceneProtest(float t, float u, const Params& p, int W, int H, bool parliame
 
 // ================================================================== STATE HOUSE: a podium, flags, the press
 void sceneStateHouse(float t, float u, const Params& p, int W, int H) {
-    begin(W, H, {.05f, .05f, .06f}, {.38f, .37f, .36f}, false, {0, 0, 0}, 0, 0);
-    light(0, {0, 7, 0}, {1, .95f, .85f}); light(1, {0, 3, 10}, {.38f, .4f, .46f});
+    Tod d = tod(p.sky);
+    begin(W, H, {.05f, .05f, .06f}, scalec({.38f, .37f, .36f}, d.ik), false, {0, 0, 0}, 0, 0);
+    light(0, {0, 7, 0}, scalec({1, .95f, .85f}, mixf(1.0f, d.ik, 0.5f))); light(1, {0, 3, 10}, scalec(mixc({.38f, .4f, .46f}, d.sun, 0.4f), 0.8f));
     float fl = 0; for (int k = 0; k < 14; k++) if (std::fmod(t * 1.7f + hashf(k * 3) * 5.0f, 2.3f) < 0.07f) fl = 1.0f;
     if (fl > 0) light(2, {0, 3, 4}, {1.6f, 1.6f, 1.6f}, 0.0f);
     V3 eye, tgt;

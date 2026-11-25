@@ -26,3 +26,26 @@ Everyone is a generic stylised figure; no real person is depicted. Violence is n
 
 ## Debug
 `people_are_watching --s3d <scene 1-7> <u 0..1> [seconds] [crowd] [smoke police night candles mourning vote results]` saves s3d.bmp.
+
+# Update: consistency + glitch pass
+
+## Coat of arms / guards
+- One shared `kenyaShield()` (black top, red middle, green bottom, white fimbriation, cockerel with axe) now draws the wall coat of arms
+  AND the chest badge of every guard / police officer, so it is identical in every scene. Wall emblem also has spears, two lions, scroll, Mount Kenya.
+- Flicker while the camera turned was z-fighting. Fixes: explicit 24-bit depth buffer (render.cpp), near plane 0.1 -> 0.25, every emblem layer is a
+  flat plate with a real gap + polygon offset, the flag is one continuous cloth mesh (no overlapping boxes), floor textures are mipmapped.
+
+## President and faces
+- President is one fixed look (`presidentLook()`): dark skin, navy suit, short black hair, in every scene. Chief Justice and Speaker are fixed looks too.
+- All skin tones (3D, 2D, crowd) are now one dark-brown family; the light tones that made people jump between scenes are gone.
+- Every face has the same layout (eyes, brows, nose, mouth, ears) drawn on top of the hair.
+
+## Time of day
+- `Params::sky` is filled from each shot's `Mood::sky` in `film.cpp`. `tod()` in interior3d.cpp drives sky, sun, ambient, window light, light shafts,
+  street lamps, floodlights, ceiling lamps and building brightness in all 3D scenes (dawn, day, midday, dusk, night, pre-dawn).
+- Debug: `--s3d <scene> <u> <t> <crowd> sky=4` previews a time of day.
+
+## Flags + Parliament (follow-up)
+- Inside flags (court, chamber, state house, stadium) are now an exact copy of the outside flag: same 74:46 proportions, same band heights, red shield with white
+  outline, crossed white spears, gold ball on the pole, same colours.
+- Parliament chamber is a full house: every seat on both sides is filled (5 rows x 18 per side = 180 members) regardless of the crowd value.

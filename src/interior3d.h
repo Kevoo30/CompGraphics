@@ -23,6 +23,7 @@ struct Params {
     bool  vote     = false;                   // CHAMBER: members stand and vote
     int   stations = 4;                       // POLLING: number of booths
     int   variant  = 0;                       // STATE_HOUSE: 0 press statement, 1 results declaration
+    int   sky      = 1;                       // time of day, same codes as Mood::sky: 0 dawn, 1 day, 2 midday, 3 dusk/evening, 4 night, 5 pre-dawn
     std::vector<Barrier> barriers;
 };
 
