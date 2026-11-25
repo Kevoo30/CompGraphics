@@ -203,16 +203,6 @@ float length(int id) {
     return float(sounds[id].data.size()) / float(RATE);
 }
 
-float wavLength(const char* path) {
-    SDL_AudioSpec spec{}; Uint8* data = nullptr; Uint32 bytes = 0;
-    if (!SDL_LoadWAV(path, &spec, &data, &bytes)) return 0.0f;
-    const int bytesPerSample = SDL_AUDIO_BITSIZE(spec.format) / 8;
-    const double bytesPerSecond = double(spec.freq) * spec.channels * bytesPerSample;
-    float seconds = bytesPerSecond > 0.0 ? static_cast<float>(bytes / bytesPerSecond) : 0.0f;
-    SDL_FreeWAV(data);
-    return seconds;
-}
-
 void setMuted(bool m) { muted = m; }
 int  applause()       { return applauseId; }
 

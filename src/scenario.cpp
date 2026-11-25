@@ -125,7 +125,10 @@ bool load(const std::string& path, Data& out, std::string& error) {
         if (const Value* v = get(value, "place")) e.place = text(*v, "");
         if (const Value* v = get(value, "date")) e.date = text(*v, "");
         if (const Value* v = get(value, "headline")) e.headline = text(*v, "");
-        if (const Value* v = get(value, "type")) e.mode = text(*v, "protest") == "voting" ? simulation::Mode::Voting : simulation::Mode::Protest;
+        if (const Value* v = get(value, "type")) {
+            const std::string type = text(*v, "protest");
+            e.mode = type == "voting" ? simulation::Mode::Voting : (type == "audience" ? simulation::Mode::Audience : simulation::Mode::Protest);
+        }
         if (const Value* v = get(value, "crowd_size")) e.crowdSize = integer(*v, e.crowdSize);
         if (const Value* v = get(value, "duration")) e.duration = static_cast<float>(number(*v, e.duration));
         if (const Value* v = get(value, "seed")) e.seed = static_cast<unsigned>(integer(*v, static_cast<int>(e.seed)));

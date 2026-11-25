@@ -78,25 +78,23 @@ namespace {
 
 namespace render {
 
-void init(int w, int h, const char* title, bool hidden) {
+void init(int w, int h, const char* title) {
     W = w; H = h;
     if (SDL_Init(SDL_INIT_VIDEO) != 0) { std::printf("SDL_Init failed: %s\n", SDL_GetError()); return; }
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);              // perspective film pass needs a real depth buffer
     SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1);     // smooth edges (anti-aliasing)
     SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 4);
-    Uint32 flags = SDL_WINDOW_OPENGL | (hidden ? SDL_WINDOW_HIDDEN : 0);
-    window = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, W, H, flags);
+    window = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, W, H, SDL_WINDOW_OPENGL);
     if (window) glctx = SDL_GL_CreateContext(window);
     if (!glctx) {                                          // retry without anti-aliasing
         if (window) SDL_DestroyWindow(window);
         SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 0);
         SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 0);
-        window = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, W, H, flags);
+        window = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, W, H, SDL_WINDOW_OPENGL);
         if (window) glctx = SDL_GL_CreateContext(window);
     }
     if (!glctx) { std::printf("OpenGL context failed: %s\n", SDL_GetError()); return; }
-    SDL_GL_SetSwapInterval(hidden ? 0 : 1);                // keep export rendering independent of display refresh
+    SDL_GL_SetSwapInterval(1);                             // vsync
 
     glViewport(0, 0, W, H);
     glMatrixMode(GL_PROJECTION);
@@ -142,20 +140,6 @@ float deltaTime()    { return dt; }
 float time()         { return float(double(SDL_GetPerformanceCounter() - startTicks) / double(SDL_GetPerformanceFrequency())); }
 int width()          { return W; }
 int height()         { return H; }
-bool isReady()        { return window != nullptr && glctx != nullptr; }
-
-bool readPixelsRGB(std::vector<unsigned char>& pixels) {
-    if (!isReady()) return false;
-    const std::size_t rowBytes = static_cast<std::size_t>(W) * 3;
-    std::vector<unsigned char> bottomUp(rowBytes * H);
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadPixels(0, 0, W, H, GL_RGB, GL_UNSIGNED_BYTE, bottomUp.data());
-    pixels.resize(bottomUp.size());
-    for (int y = 0; y < H; ++y)
-        std::copy_n(bottomUp.data() + static_cast<std::size_t>(H - 1 - y) * rowBytes,
-                    rowBytes, pixels.data() + static_cast<std::size_t>(y) * rowBytes);
-    return glGetError() == GL_NO_ERROR;
-}
 
 void fillPolygonGradient(const std::vector<Vec2>& pts, Color c1, Color c2, bool horizontal) {
     std::vector<int> tris = triangulate(pts);

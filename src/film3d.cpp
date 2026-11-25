@@ -42,7 +42,7 @@ void flag(float x,float y,float z,float t){
 }
 void poleFlag(float x,float z,float t,bool halfMast=false){color(.65f,.66f,.64f);beam({x,0,z},{x,6.4f,z},.045f);flag(x+.04f,halfMast?4.8f:6.3f,z,t);}
 
-void person(float x,float z,float scale,int id,float t,const Mood&m,bool moving=false){
+void person(float x,float z,float scale,int id,float t,const Mood&m,bool moving=false,float heading=0.0f){
     float phase=t*(2.0f+0.7f*hash(id+37))+id*1.73f;
     float gait=std::sin(phase),step=std::cos(phase);
     float bob=std::fabs(gait)*.035f*m.energy;
@@ -53,7 +53,8 @@ void person(float x,float z,float scale,int id,float t,const Mood&m,bool moving=
     bool walking=moving||(m.placards&&m.energy>.4f);
     float stride=walking?step*.18f:0.0f;
     float armSwing=walking?gait*.38f:.08f*std::sin(t*1.3f+id*1.91f);
-    glPushMatrix();glTranslatef(x,0,z);glScalef(scale,scale,scale);glRotatef(walking?gait*2.5f:0,0,1,0);shadow(0,0,.46f,.27f);
+    float idleSway=walking?gait*2.5f:2.0f*std::sin(t*.42f+id*1.37f);
+    glPushMatrix();glTranslatef(x,0,z);glScalef(scale,scale,scale);glRotatef(heading+idleSway,0,1,0);shadow(0,0,.46f,.27f);
     color(.08f,.09f,.11f);
     for(float side:{-1.f,1.f}){
         float offset=side<0?stride:-stride;
@@ -104,9 +105,9 @@ void civicBuilding(Loc loc,float t,const Mood&m){
 void ballotSet(float t,const Mood&m){
     color(.72f,.66f,.54f);box(0,2,-8,13,4,6);color(.55f,.25f,.17f);box(0,4.15f,-8,13,.35f,6.2f);
     for(int i=-2;i<=2;i++){color(.22f,.31f,.37f);box(i*2.05f,2.15f,-4.92f,1.35f,2.3f,.12f);color(.09f,.14f,.17f);box(i*2.05f,2.15f,-4.82f,1.13f,1.95f,.06f);}
-    color(.42f,.28f,.17f);box(5,1.02f,1,2.5f,.2f,1.1f);color(.86f,.84f,.75f);box(4.5f,1.16f,.7f,.55f,.04f,.7f);
-    color(.06f,.07f,.10f);box(0,.78f,6,.82f,1.55f,.82f);color(.12f,.25f,.46f);box(0,.82f,6,1.0f,1.45f,1.0f);color(.035f,.04f,.05f);box(0,1.57f,6,.5f,.06f,.35f);
-    float cyc=std::fmod(t+1.4f,5.f);if(cyc<2){color(.96f,.94f,.86f);box(0,1.72f+(cyc/2.f)*.48f,6,.42f,.035f,.3f);}
+    color(.42f,.28f,.17f);box(5,1.02f,-2.7f,2.5f,.2f,1.1f);color(.86f,.84f,.75f);box(4.5f,1.16f,-3.0f,.55f,.04f,.7f);
+    color(.06f,.07f,.10f);box(0,.78f,-1.8f,.82f,1.55f,.82f);color(.12f,.25f,.46f);box(0,.82f,-1.8f,1.0f,1.45f,1.0f);color(.035f,.04f,.05f);box(0,1.57f,-1.8f,.5f,.06f,.35f);
+    float cyc=std::fmod(t+1.4f,5.f);if(cyc<2){color(.96f,.94f,.86f);box(0,1.72f+(cyc/2.f)*.48f,-1.8f,.42f,.035f,.3f);}
     poleFlag(-8,0,t,m.halfMast);
 }
 void stadium(float t){color(.31f,.33f,.36f);for(int row=0;row<5;row++){box(0,1.0f+row*.65f,-9+row*.72f,25,1.25f,2.0f);for(int i=0;i<58;i++){float x=-11.5f+i*.4f,z=-9+row*.72f;int c=(i*7+row*11)%6;color(c==0?.65f:.18f,c==1?.42f:.28f,c==2?.2f:.34f);ellipsoid(x,1.9f+row*.65f,z,.12f,.17f,.12f);}}color(.20f,.40f,.23f);plane(0,.02f,2,19,15,.2f,.4f,.2f);}
@@ -161,11 +162,11 @@ void scene(Loc loc,float t,const Mood&m,const simulation::Simulation* sim){
             if(a.state==simulation::State::Finished||a.state==simulation::State::GaveUp)continue;
             Mood agentMood=m;
             if(sim->mode()==simulation::Mode::Protest)agentMood.energy=std::max(agentMood.energy,.48f);
-            bool moving=a.state==simulation::State::Approaching||a.state==simulation::State::Queuing||a.state==simulation::State::Leaving||a.state==simulation::State::Gathering||a.state==simulation::State::Dispersing;
+            bool moving=a.state==simulation::State::Approaching||a.state==simulation::State::Queuing||a.state==simulation::State::ToBallotBox||a.state==simulation::State::Leaving||a.state==simulation::State::Gathering||a.state==simulation::State::Dispersing;
             float x=a.position.x,z=a.position.y+(sim->mode()==simulation::Mode::Protest?-2.0f:0.0f);
             float ageScale=a.age==simulation::AgeGroup::Youth?.96f:(a.age==simulation::AgeGroup::Senior?.93f:1.0f);
             float scale=(.88f+(hash(static_cast<int>(a.id)*31+m.seed)-.5f)*.12f)*ageScale;
-            person(x,z,scale,static_cast<int>(a.id),t,agentMood,moving);
+            person(x,z,scale,static_cast<int>(a.id),t,agentMood,moving,a.heading);
         }
     } else if(loc!=Loc::BALLOT&&loc!=Loc::STADIUM){int n=std::max(0,std::min(m.crowd,86)),cols=(n+3)/4;float spacing=cols>1?std::min(1.0f,18.0f/(cols-1)):1.0f;for(int i=0;i<n;i++){float row=float(i%4),x=(float(i/4)-float(cols-1)*.5f)*spacing+(hash(i*17+m.seed)-.5f)*.32f,z=2+row*2.1f+hash(i*7+m.seed)*.5f;float size=.95f+(hash(i*29+m.seed)-.5f)*.12f;person(x,z,size,i,t,m);}}
     if(!sim&&loc==Loc::BALLOT){for(int i=0;i<15;i++){float x=-3.4f+(i%2)*.78f+(hash(i+91)-.5f)*.12f;float z=1.5f+(i/2)*.78f;person(x,z,.9f+(hash(i+51)-.5f)*.08f,i,t,m);}}

@@ -55,20 +55,30 @@ void Simulation::reset(Config config) {
         if (config_.mode == Mode::Voting) {
             // Queue lanes sit in front of a polling station at the origin.
             const float lane = (a.station - (config_.stations - 1) * .5f) * 1.35f;
-            a.position = {-8.0f + hash01(key + 6) * 16.0f, 10.0f + hash01(key + 7) * 5.0f};
+            // Voters enter from the street side, behind the queue, rather than
+            // appearing halfway between the station and the camera.
+            a.position = {-8.0f + hash01(key + 6) * 16.0f, 15.0f + hash01(key + 7) * 5.0f};
             a.velocity = {};
             a.state = State::Approaching;
             // Use the turnout attribute as an individual's decision to participate.
             if (hash01(key + 8) > config_.districts[a.district].turnout) a.state = State::Finished;
             else ++tallies_[a.district].represented;
             (void)lane;
-        } else {
+        } else if (config_.mode == Mode::Protest) {
             const float angle = hash01(key + 6) * 6.2831853f;
             const float radius = 7.0f + hash01(key + 7) * 6.0f;
             a.position = {std::cos(angle) * radius, std::sin(angle) * radius};
             a.state = State::Gathering;
             a.arrivalTime = hash01(key + 9) * 3.0f;
             if (a.arrivalTime > 0.0f) a.state = State::Finished;
+        } else {
+            const int columns = std::max(1, static_cast<int>(std::ceil(std::sqrt(config_.agents * 1.8f))));
+            const int row = i / columns;
+            const int column = i % columns;
+            a.position = {(column - (columns - 1) * .5f) * 2.1f + (hash01(key + 6) - .5f) * .55f,
+                          .7f + row * 1.8f + (hash01(key + 7) - .5f) * .55f};
+            a.heading = 180.0f;
+            a.state = State::Listening;
         }
         agents_.push_back(a);
     }
@@ -78,20 +88,35 @@ void Simulation::step(float dt) {
     if (!(dt > 0.0f) || !std::isfinite(dt)) return;
     dt = std::min(dt, .1f);
     elapsed_ += dt;
-    if (config_.mode == Mode::Voting) stepVoting(dt); else stepProtest(dt);
+    if (config_.mode == Mode::Voting) stepVoting(dt);
+    else if (config_.mode == Mode::Protest) stepProtest(dt);
 }
 
 void Simulation::stepVoting(float dt) {
+    bool ballotBoxBusy = false;
+    for (const Agent& agent : agents_)
+        if (agent.state == State::ToBallotBox || agent.state == State::Casting) ballotBoxBusy = true;
+
     for (Agent& a : agents_) {
         a.stateTime += dt;
         const float lane = (a.station - (config_.stations - 1) * .5f) * 1.35f;
         int rankAhead = 0;
         for (const Agent& other : agents_)
             if (other.station == a.station && other.queueRank < a.queueRank &&
-                other.state != State::Finished && other.state != State::GaveUp && other.state != State::Leaving)
+                other.state != State::Finished && other.state != State::GaveUp && other.state != State::Leaving &&
+                other.state != State::ToBallotBox && other.state != State::Casting)
                 ++rankAhead;
-        const Vec2 queueSpot{lane, 5.2f - rankAhead * .72f};
-        const Vec2 exitSpot{lane + (a.station % 2 ? 9.0f : -9.0f), -2.0f};
+        // Rank zero stands nearest the polling booths; later voters queue behind it.
+        const Vec2 queueSpot{lane, 4.0f + rankAhead * .72f};
+        // The ballot box is just outside the booth row. Voters leave the queue,
+        // cast there, then return to the street on the same side of the set.
+        const Vec2 ballotSpot{lane * .55f, -.55f};
+        const Vec2 exitSpot{a.station % 2 ? 10.0f : -10.0f, 16.0f};
+        // Keep the line moving forward as people step out to cast or leave.
+        if (a.state == State::Waiting && length(sub(queueSpot, a.position)) > .16f) {
+            a.state = State::Queuing;
+            a.stateTime = 0.0f;
+        }
         if (a.state == State::Approaching || a.state == State::Queuing) {
             const Vec2 delta = sub(queueSpot, a.position);
             if (length(delta) < .18f) {
@@ -100,6 +125,7 @@ void Simulation::stepVoting(float dt) {
                 a.state = a.state == State::Waiting ? State::Queuing : a.state;
                 a.velocity = limit(add(mul(a.velocity, .88f), mul(normalized(delta), 1.8f)), 2.2f);
                 a.position = add(a.position, mul(a.velocity, dt));
+                if (length(a.velocity) > .05f) a.heading = std::atan2(a.velocity.x, a.velocity.y) * 57.2957795f;
             }
         } else if (a.state == State::Waiting) {
             // Long queues discourage some visitors. A deterministic personal patience threshold
@@ -107,8 +133,18 @@ void Simulation::stepVoting(float dt) {
             const float waitBeforeService = 1.2f + rankAhead * .65f;
             if (waitBeforeService > a.patience) {
                 a.state = State::GaveUp; ++gaveUpCount_;
-            } else if (a.stateTime >= waitBeforeService) {
-                a.state = State::Casting; a.stateTime = 0.0f;
+            } else if (a.stateTime >= waitBeforeService && !ballotBoxBusy) {
+                a.state = State::ToBallotBox; a.stateTime = 0.0f;
+                ballotBoxBusy = true;
+            }
+        } else if (a.state == State::ToBallotBox) {
+            const Vec2 delta = sub(ballotSpot, a.position);
+            if (length(delta) < .22f) {
+                a.position = ballotSpot; a.velocity = {}; a.state = State::Casting; a.stateTime = 0.0f;
+            } else {
+                a.velocity = limit(add(mul(a.velocity, .88f), mul(normalized(delta), 1.35f)), 1.7f);
+                a.position = add(a.position, mul(a.velocity, dt));
+                if (length(a.velocity) > .05f) a.heading = std::atan2(a.velocity.x, a.velocity.y) * 57.2957795f;
             }
         } else if (a.state == State::Casting && a.stateTime >= .8f) {
             a.state = State::Leaving; a.stateTime = 0.0f;
@@ -118,6 +154,7 @@ void Simulation::stepVoting(float dt) {
             Vec2 delta = sub(exitSpot, a.position);
             a.velocity = limit(add(mul(a.velocity, .88f), mul(normalized(delta), 2.0f)), 2.2f);
             a.position = add(a.position, mul(a.velocity, dt));
+            if (length(a.velocity) > .05f) a.heading = std::atan2(a.velocity.x, a.velocity.y) * 57.2957795f;
             if (length(delta) < .25f) a.state = State::Finished;
         }
     }
@@ -174,6 +211,7 @@ void Simulation::stepProtest(float dt) {
         Agent& a = agents_[i];
         a.velocity = nextVelocity[i];
         a.position = add(a.position, mul(a.velocity, dt));
+        if (length(a.velocity) > .05f) a.heading = std::atan2(a.velocity.x, a.velocity.y) * 57.2957795f;
         if (a.state == State::Dispersing && length(a.position) > 14.0f) a.state = State::Finished;
     }
 }

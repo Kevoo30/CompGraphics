@@ -1,7 +1,7 @@
 #include "locations.h"
 #include "render.h"
 #include "animation.h"
-#include "effects.h"
+#include "font.h"
 #include <algorithm>
 #include <cmath>
 #include <vector>
@@ -85,6 +85,24 @@ void drawSky(const Mat3& M, const Pal& p, float horizon, float t) {
         glow(M, {p.sx, p.sy}, p.sr * 1.8f, p.sun, 0.15f);
         disc(M, {p.sx, p.sy}, p.sr, p.sun);
     }
+    {   // drifting clouds
+        static const int cnt[6] = {4, 6, 3, 6, 3, 4};
+        int sky = p.night ? 4 : (p.sx > 600 && p.sy > 300 ? 3 : 1);
+        (void)sky;
+        for (int k = 0; k < 6; k++) {
+            if (k >= (p.night ? 3 : (p.tintA > 0.08f ? 6 : (p.tintA > 0.04f ? 3 : 5)))) break;
+            float cx = std::fmod(hash(k + 7) * 1100.0f + t * (2.5f + hash(k) * 4.0f), 1100.0f) - 150.0f;
+            float cy = 50 + hash(k + 40) * (horizon - 230), w = 70 + hash(k + 80) * 110;
+            Color cc = p.night ? Color{45, 50, 85} : mix({255, 255, 255}, p.bot, 0.35f);
+            for (int q = 0; q < 4; q++) glow(M, {cx + (q - 1.5f) * w * 0.35f, cy + (q % 2) * 6.0f}, w * (0.45f + 0.1f * (q % 2)), cc, 0.22f);
+        }
+        if (!p.night && p.tintA < 0.09f)                                 // a few birds
+            for (int b = 0; b < 3; b++) {
+                float bx = std::fmod(t * (22.0f + b * 5) + b * 260.0f, 1000.0f) - 100.0f, by = 90 + b * 30 + std::sin(t * 0.8f + b) * 10;
+                float fl = std::sin(t * 9 + b * 2) * 5;
+                line(M, {bx - 8, by - fl}, {bx, by}, {30, 30, 35}); line(M, {bx, by}, {bx + 8, by - fl}, {30, 30, 35});
+            }
+    }
     grad(M, rect(-40, horizon, 880, 700 - horizon), p.gTop, p.gBot);
     fill(M, rect(-40, 700, 880, 1300), p.gBot);
 }
@@ -125,61 +143,170 @@ void flagPole(const Mat3& M, float x, float baseY, float topY, bool halfMast, fl
     flag(M, x + 2, halfMast ? topY + 46 : topY + 2, w, h, t);
 }
 
-// ---------- people ----------
-void people(const Mat3& M, const Mood& m, float t, float x0, float x1, float baseY, float size) {
-    const Color skin[4]  = {{141, 85, 36}, {198, 134, 66}, {224, 172, 105}, {94, 56, 30}};
-    const Color shirt[8] = {{40, 60, 110}, {150, 40, 40}, {50, 100, 65}, {90, 90, 100}, {170, 130, 45}, {70, 45, 100}, {200, 200, 205}, {35, 35, 40}};
-    const Color sign[4]  = {{235, 235, 235}, {240, 200, 60}, {220, 70, 60}, {80, 170, 100}};
-    int n = std::max(0, m.crowd);
-    for (int row = 0; row < 3; row++) {
-        for (int i = row; i < n; i += 3) {
-            float x = x0 + (x1 - x0) * (i + 0.5f) / std::max(1, n) + (hash(i * 7 + m.seed) - 0.5f) * size * 1.4f;
-            float s = size * (1.0f + 0.14f * row);
-            float bob = std::fabs(std::sin(t * 3.0f + i * 1.7f)) * s * 0.30f * m.energy;
-            float y = baseY + row * size * 0.95f - bob;
-            // Marchers take small, unsynchronised steps instead of bouncing in place.
-            if (m.placards && m.energy > 0.45f)
-                x += std::sin(t * (1.7f + 0.35f * (i % 4)) + i * 1.9f) * size * 0.22f;
-            Color c = m.mourning ? shirt[(i % 2) ? 7 : 3] : shirt[(i * 5 + m.seed) % 8];
-            if (m.sky == 4) c = mix(c, {10, 12, 30}, 0.45f);
-            if (m.sky == 3) c = mix(c, {40, 20, 40}, 0.25f);
-            Color sk = skin[(i * 3 + m.seed) % 4];
-            bool holdingSign = m.placards && hash(i + 31 + m.seed) < 0.55f;
-            effects::Pose pose;
-            pose.fromBehind = true;
-            if (holdingSign) {
-                pose.leftArm = 2.25f + 0.12f * std::sin(t * 2.0f + i);
-                pose.rightArm = 0.08f * std::sin(t * 1.4f + i);
-            } else if (m.fists && hash(i + 77) < 0.5f) {
-                pose.rightArm = 2.2f + 0.3f * std::sin(t * 4.0f + i);
-            } else {
-                pose.leftArm = 0.05f * std::sin(t * 1.1f + i);
-                pose.rightArm = 0.05f * std::sin(t * 1.3f + i * 1.7f);
+// ---------- articulated people (walk cycle, arms, hair, clothes, ground shadow) ----------
+struct Look { Color skin, top, bottom, hair, sign; int hairStyle; bool dress; };
+enum ArmMode { ARM_DOWN, ARM_FIST, ARM_PLACARD, ARM_PHONE, ARM_CANDLE, ARM_BOTH_UP };
+
+Look makeLook(int id, int seed, const Mood& m) {
+    static const Color skin[5]   = {{141, 85, 36}, {198, 134, 66}, {94, 56, 30}, {70, 42, 24}, {165, 105, 55}};
+    static const Color top[10]   = {{40, 60, 110}, {150, 40, 40}, {50, 100, 65}, {90, 90, 100}, {170, 130, 45}, {70, 45, 100}, {205, 205, 208}, {35, 35, 40}, {200, 110, 40}, {60, 120, 150}};
+    static const Color bottom[5] = {{35, 45, 80}, {30, 30, 34}, {62, 56, 50}, {48, 62, 92}, {25, 25, 28}};
+    static const Color hair[3]   = {{20, 16, 14}, {36, 26, 18}, {56, 40, 28}};
+    static const Color sign[5]   = {{245, 245, 240}, {245, 210, 70}, {228, 85, 70}, {95, 178, 108}, {125, 172, 232}};
+    int h = id * 7 + seed * 13;
+    Look L;
+    L.skin   = skin[int(hash(h + 1) * 5) % 5];
+    L.top    = m.mourning ? (hash(h + 2) < 0.7f ? Color{25, 25, 30} : Color{205, 205, 210}) : top[int(hash(h + 2) * 10) % 10];
+    L.bottom = bottom[int(hash(h + 3) * 5) % 5];
+    L.hair   = hair[int(hash(h + 4) * 3) % 3];
+    L.sign   = sign[int(hash(h + 8) * 5) % 5];
+    L.dress  = hash(h + 5) < 0.28f;
+    L.hairStyle = L.dress ? (hash(h + 6) < 0.5f ? 2 : 1) : (hash(h + 6) < 0.2f ? 3 : 0);
+    if (m.sky == 4) { L.top = mix(L.top, {10, 12, 30}, 0.5f); L.bottom = mix(L.bottom, {10, 12, 30}, 0.5f); L.skin = mix(L.skin, {20, 20, 45}, 0.3f); }
+    if (m.sky == 3) { L.top = mix(L.top, {60, 30, 50}, 0.25f); L.skin = mix(L.skin, {200, 90, 60}, 0.15f); }
+    return L;
+}
+
+void limb(const Mat3& M, Vec2 a, Vec2 b, float w0, float w1, Color c) {
+    Vec2 d = {b.x - a.x, b.y - a.y}; float L = std::hypot(d.x, d.y); if (L < 0.001f) return;
+    Vec2 n = {-d.y / L, d.x / L};
+    fill(M, {{a.x + n.x * w0, a.y + n.y * w0}, {b.x + n.x * w1, b.y + n.y * w1}, {b.x - n.x * w1, b.y - n.y * w1}, {a.x - n.x * w0, a.y - n.y * w0}}, c);
+}
+void label(const Mat3& M, const char* text, float x, float y, float widthWorld, Color c, float alpha = 1.0f) {
+    float z = zoomOf(M); Vec2 sp = M * Vec2{x, y};
+    font::draw(text, sp.x, sp.y, font::fit(text, widthWorld * z, 6.0f * z), c, alpha, true, false);
+}
+
+void figure(const Mat3& M, float x, float y, float s, const Look& L, float ph, float walk, ArmMode arm, float t, float bow = 0.0f, bool shadowOn = true) {
+    float bob = std::fabs(std::sin(ph)) * 0.06f * s * walk;
+    float yb = y - bob, hipY = yb - 1.45f * s, shY = yb - 2.42f * s;
+    float sw = std::sin(ph) * 0.5f * walk * s;
+    Color dkBot = mix(L.bottom, {0, 0, 0}, 0.35f);
+    if (shadowOn) shade(M, ellipse(x, y + 0.03f * s, 0.85f * s, 0.16f * s, 12), {0, 0, 0}, 0.30f);
+    for (int k = 0; k < 2; k++) {                                                      // legs
+        float side = k ? 1.0f : -1.0f, swing = k ? -sw : sw;
+        float lift = std::max(0.0f, k ? -std::cos(ph) : std::cos(ph)) * 0.16f * s * walk;
+        Vec2 hip = {x + side * 0.16f * s, hipY}, foot = {x + side * 0.18f * s + swing, y - lift};
+        Vec2 knee = {(hip.x + foot.x) / 2 + (swing > 0 ? 0.05f * s : 0.0f), (hip.y + foot.y) / 2 - lift * 0.3f};
+        if (L.dress) limb(M, {hip.x, hip.y + 0.55f * s}, foot, 0.1f * s, 0.07f * s, L.skin);
+        else { Color lc = k ? L.bottom : dkBot; limb(M, hip, knee, 0.15f * s, 0.12f * s, lc); limb(M, knee, foot, 0.12f * s, 0.09f * s, lc); }
+        fill(M, {{foot.x - 0.12f * s, foot.y - 0.07f * s}, {foot.x + 0.24f * s, foot.y - 0.05f * s}, {foot.x + 0.26f * s, foot.y + 0.02f * s}, {foot.x - 0.12f * s, foot.y + 0.02f * s}}, {28, 24, 22});
+    }
+    if (L.dress) grad(M, {{x - 0.5f * s, shY}, {x + 0.5f * s, shY}, {x + 0.68f * s, yb - 0.55f * s}, {x - 0.68f * s, yb - 0.55f * s}}, L.top, mix(L.top, {0, 0, 0}, 0.3f));
+    else {
+        grad(M, {{x - 0.52f * s, shY}, {x + 0.52f * s, shY}, {x + 0.42f * s, hipY + 0.12f * s}, {x - 0.42f * s, hipY + 0.12f * s}}, L.top, mix(L.top, {0, 0, 0}, 0.3f));
+        fill(M, rect(x - 0.42f * s, hipY + 0.05f * s, 0.84f * s, 0.1f * s), dkBot);
+    }
+    for (int k = 0; k < 2; k++) {                                                      // arms
+        float side = k ? 1.0f : -1.0f, armSw = (k ? sw : -sw) * 0.8f;
+        Vec2 sho = {x + side * 0.52f * s, shY + 0.1f * s};
+        Vec2 hand = {sho.x + side * 0.12f * s + armSw * 0.4f, sho.y + 1.0f * s - std::fabs(armSw) * 0.1f};
+        if (k == 1) {
+            switch (arm) {
+                case ARM_FIST:    hand = {x + 0.75f * s, shY - (0.55f + 0.2f * std::sin(t * 4 + ph)) * s}; break;
+                case ARM_PLACARD: hand = {x + 0.62f * s, shY - 0.45f * s}; break;
+                case ARM_PHONE:   hand = {x + 0.3f * s, shY - 0.5f * s}; break;
+                case ARM_CANDLE:  hand = {x + 0.5f * s, shY + 0.7f * s}; break;
+                case ARM_BOTH_UP: hand = {x + 0.8f * s, shY - 0.7f * s}; break;
+                default: break;
             }
-            PersonStyle style{sk, c, shirt[(i + m.seed) % 8], {150, 35, 35},
-                              shirt[(i * 3 + m.seed + 2) % 8], {25, 18, 15}};
-            // The detailed model is 193 local units tall; s/58 keeps its screen
-            // height close to the old 3.3*s silhouette instead of shrinking it.
-            effects::drawPerson(M, {x, y}, s / 58.0f, style, (i % 2) ? 1 : -1, pose, true);
-            if (holdingSign) {
-                float sway = std::sin(t * 2.0f + i) * 0.35f * s;
-                Vec2 top = {x + 0.9f * s + sway, y - 4.6f * s};
-                line(M, {x + 0.7f * s, y - 1.8f * s}, top, {110, 80, 50});
-                fill(M, {{top.x - 1.2f * s, top.y - 1.6f * s}, {top.x + 1.2f * s, top.y - 1.6f * s}, {top.x + 1.2f * s, top.y}, {top.x - 1.2f * s, top.y}}, sign[(i + m.seed) % 4]);
-                // Hand-lettering marks without adding slogans that could misstate the event.
-                line(M, {top.x - 0.72f * s, top.y - 1.12f * s}, {top.x + 0.58f * s, top.y - 1.12f * s}, {35, 35, 38});
-                line(M, {top.x - 0.72f * s, top.y - 0.62f * s}, {top.x + 0.28f * s, top.y - 0.62f * s}, {35, 35, 38});
-                line(M, {top.x - 0.55f * s, top.y - 0.12f * s}, {top.x + 0.66f * s, top.y - 0.12f * s}, {35, 35, 38});
-            }
-            if (m.candles) {
-                float fl = 0.6f + 0.4f * std::sin(t * 9 + i * 2.3f);
-                Vec2 hand = {x + 0.3f * s, y - 1.5f * s};
-                fill(M, rect(hand.x - 0.12f * s, hand.y, 0.24f * s, 0.55f * s), {240, 235, 215});
-                glow(M, {hand.x, hand.y - 0.3f * s}, 2.2f * s, {255, 190, 80}, 0.16f * fl);
-                disc(M, {hand.x, hand.y - 0.28f * s}, 0.2f * s * fl + 0.1f * s, {255, 215, 100});
-            }
+        } else if (arm == ARM_BOTH_UP) hand = {x - 0.8f * s, shY - 0.7f * s};
+        Vec2 elb = {(sho.x + hand.x) / 2 + side * 0.12f * s, (sho.y + hand.y) / 2 + 0.12f * s};
+        limb(M, sho, elb, 0.12f * s, 0.10f * s, L.top);
+        limb(M, elb, hand, 0.10f * s, 0.08f * s, L.skin);
+        disc(M, hand, 0.1f * s, L.skin);
+        if (k == 1 && arm == ARM_PLACARD) {
+            float sway = std::sin(t * 2.0f + ph) * 0.2f * s;
+            Vec2 top = {hand.x + 0.05f * s + sway, shY - 2.7f * s};
+            limb(M, {hand.x, hand.y + 0.8f * s}, top, 0.04f * s, 0.04f * s, {110, 80, 50});
+            Poly b = {{top.x - 1.05f * s, top.y - 1.4f * s}, {top.x + 1.05f * s, top.y - 1.45f * s}, {top.x + 1.05f * s, top.y + 0.02f * s}, {top.x - 1.05f * s, top.y}};
+            fill(M, b, L.sign); render::drawPolygon(transformPoly(M, b), {40, 35, 30});
+            for (int q = 0; q < 3; q++) line(M, {top.x - 0.8f * s, top.y - (1.05f - q * 0.3f) * s}, {top.x + (0.8f - 0.25f * q) * s, top.y - (1.07f - q * 0.3f) * s}, {45, 30, 30});
+        } else if (k == 1 && arm == ARM_PHONE) {
+            fill(M, rect(hand.x - 0.09f * s, hand.y - 0.3f * s, 0.18f * s, 0.3f * s), {18, 18, 24});
+            glow(M, {hand.x, hand.y - 0.15f * s}, 0.35f * s, {150, 190, 255}, 0.25f);
+        } else if (k == 1 && arm == ARM_CANDLE) {
+            float fl = 0.6f + 0.4f * std::sin(t * 9 + ph * 2.3f);
+            fill(M, rect(hand.x - 0.1f * s, hand.y - 0.45f * s, 0.2f * s, 0.5f * s), {240, 235, 215});
+            glow(M, {hand.x, hand.y - 0.65f * s}, 2.0f * s, {255, 190, 80}, 0.16f * fl);
+            disc(M, {hand.x, hand.y - 0.6f * s}, 0.16f * s * fl + 0.07f * s, {255, 215, 100});
         }
     }
+    float hx = x + bow * 0.14f * s, hy = shY - 0.45f * s + bow * 0.12f * s;           // head
+    limb(M, {x, shY}, {hx, hy + 0.2f * s}, 0.1f * s, 0.1f * s, L.skin);
+    if (L.hairStyle == 1) disc(M, {hx, hy - 0.08f * s}, 0.43f * s, L.hair);
+    if (L.hairStyle == 2) fill(M, ellipse(hx, hy - 0.02f * s, 0.42f * s, 0.46f * s, 14), mix(L.top, {0, 0, 0}, 0.2f));
+    fill(M, ellipse(hx, hy, 0.29f * s, 0.36f * s, 14), L.skin);
+    if (L.hairStyle == 0) fill(M, ellipse(hx, hy - 0.17f * s, 0.3f * s, 0.2f * s, 14), L.hair);
+    if (L.hairStyle == 3) { fill(M, ellipse(hx, hy - 0.2f * s, 0.32f * s, 0.2f * s, 14), L.top); fill(M, rect(hx - 0.1f * s, hy - 0.12f * s, 0.42f * s, 0.06f * s), mix(L.top, {0, 0, 0}, 0.3f)); }
+    if (s >= 15) { disc(M, {hx - 0.1f * s, hy - 0.02f * s}, 0.03f * s, {20, 15, 12}); disc(M, {hx + 0.1f * s, hy - 0.02f * s}, 0.03f * s, {20, 15, 12}); }
+}
+
+// ---------- people (crowds): march, wave, hold placards, film, mourn ----------
+void people(const Mat3& M, const Mood& m, float t, float x0, float x1, float baseY, float size) {
+    int n = std::max(0, m.crowd);
+    bool protest = m.placards || m.fists;
+    bool march = protest && m.energy >= 0.45f;
+    float range = (x1 - x0) + 160.0f;
+    for (int row = 0; row < 3; row++) {
+        for (int i = row; i < n; i += 3) {
+            float base = x0 + (x1 - x0) * (i + 0.5f) / std::max(1, n) + (hash(i * 7 + m.seed) - 0.5f) * size * 1.4f;
+            float s = size * (1.0f + 0.14f * row) * (0.94f + 0.12f * hash(i + 3));
+            float x = base, y = baseY + row * size * 0.95f;
+            float spd = (14.0f + 26.0f * m.energy) * (1.0f - 0.08f * row);
+            if (march) x = x0 - 80.0f + std::fmod(base - x0 + 80.0f + t * spd, range);
+            Look L = makeLook(i + row * 100, m.seed, m);
+            float ph = march ? t * (5.0f + 3.0f * m.energy) + i * 1.7f : t * 1.1f + i;
+            float walk = march ? 1.0f : 0.0f;
+            if (!march) { x += std::sin(t * 0.9f + i * 2.1f) * 0.06f * s; y -= std::fabs(std::sin(t * 3.0f + i * 1.7f)) * s * 0.2f * m.energy; }
+            ArmMode arm = ARM_DOWN; float r = hash(i * 3 + m.seed + 31);
+            if (m.candles) arm = ARM_CANDLE;
+            else if (m.placards && r < 0.5f) arm = ARM_PLACARD;
+            else if (m.fists && hash(i + 77 + m.seed) < 0.5f) arm = (hash(i + 5) < 0.3f ? ARM_BOTH_UP : ARM_FIST);
+            else if (!m.mourning && hash(i + m.seed * 5 + 9) < 0.1f) arm = ARM_PHONE;
+            float bow = m.mourning ? 0.55f + 0.15f * std::sin(t * 0.7f + i) : 0.0f;
+            figure(M, x, y, s, L, ph, walk, arm, t, bow);
+        }
+    }
+}
+// a cloth banner carried between two marchers
+void banner(const Mat3& M, const Mood& m, float t, float cx, float baseY, float size) {
+    if (!m.banner) return;
+    bool march = m.energy >= 0.45f;
+    float w = 340.0f; cx += std::sin(t * 0.45f) * 18.0f;
+    float top = baseY - 5.4f * size, h = 1.9f * size;
+    for (int e = 0; e < 2; e++) {
+        float px = cx + (e ? 1 : -1) * w / 2;
+        limb(M, {px, top - 6}, {px, baseY - 1.2f * size}, 1.8f, 1.8f, {105, 80, 55});
+        figure(M, px, baseY, size * 1.1f, makeLook(900 + e * 7, m.seed, m), t * 6.0f + e * 2.0f, march ? 1.0f : 0.0f, ARM_DOWN, t);
+    }
+    Poly cloth, lower;
+    for (int k = 0; k <= 12; k++) cloth.push_back({cx - w / 2 + w * k / 12, top + std::sin(t * 2.0f + k * 0.6f) * 2.5f});
+    for (int k = 12; k >= 0; k--) cloth.push_back({cx - w / 2 + w * k / 12, top + h + std::sin(t * 2.0f + k * 0.6f + 0.8f) * 2.5f});
+    fill(M, cloth, {240, 238, 228}); render::drawPolygon(transformPoly(M, cloth), {60, 55, 50});
+    label(M, m.banner, cx, top + h * 0.28f, w * 0.88f, {170, 25, 25});
+}
+void policeLine(const Mat3& M, float t, float x0, float x1, float baseY, float size) {
+    Look L; L.skin = {105, 65, 35}; L.top = {38, 52, 86}; L.bottom = {30, 38, 62}; L.hair = {20, 20, 20}; L.sign = {0, 0, 0}; L.hairStyle = 3; L.dress = false;
+    for (float x = x0; x < x1; x += size * 1.6f) {
+        figure(M, x, baseY, size, L, 0, 0, ARM_DOWN, t);
+        float cx = x - 0.14f * size, top = baseY - 2.30f * size;
+        Poly crest = {{cx - 0.18f * size, top}, {cx + 0.18f * size, top}, {cx + 0.18f * size, top + 0.46f * size}, {cx, top + 0.62f * size}, {cx - 0.18f * size, top + 0.46f * size}};
+        fill(M, crest, {238, 232, 211});
+        fill(M, rect(cx - 0.14f * size, top + 0.03f * size, 0.28f * size, 0.16f * size), {12, 12, 14});
+        fill(M, rect(cx - 0.14f * size, top + 0.20f * size, 0.28f * size, 0.16f * size), {185, 30, 38});
+        fill(M, rect(cx - 0.14f * size, top + 0.37f * size, 0.28f * size, 0.15f * size), {24, 105, 55});
+        Poly sh = {{x + 0.15f * size, baseY - 2.6f * size}, {x + 1.05f * size, baseY - 2.6f * size}, {x + 1.05f * size, baseY - 0.7f * size}, {x + 0.15f * size, baseY - 0.7f * size}};
+        shade(M, sh, {190, 220, 245}, 0.5f); render::drawPolygon(transformPoly(M, sh), {210, 225, 240});
+    }
+}
+void teargas(const Mat3& M, float t, int seed, float cx) {
+    for (int k = 0; k < 24; k++) {
+        float ph = std::fmod(t * 0.11f + hash(k + seed * 3), 1.0f);
+        float x = cx + (hash(k * 3 + seed) - 0.5f) * 560.0f + ph * 70.0f, y = 480 - ph * 200.0f, r = 28 + ph * 80;
+        shade(M, ellipse(x, y, r, r * 0.8f, 16), {225, 225, 222}, 0.17f * std::sin(ph * PI));
+    }
+    shade(M, rect(-40, 250, 880, 320), {205, 205, 200}, 0.07f);
 }
 // dark heads and shoulders at the bottom edge: "the people are watching"
 void foreground(const Mat3& M, int n, float t, const Mood& m) {
@@ -268,7 +395,10 @@ void locStreet(const Mat3& M, float t, const Mood& m, const Pal& p) {
         for (int w = 0; w < 4; w++) fill(M, rect(bx + 8 + w * 32, 455, 24, 14), {80, 110, 140});
         disc(M, {bx + 28, 502}, 9, {20, 20, 22}); disc(M, {bx + 112, 502}, 9, {20, 20, 22});
     }
+    if (m.police) policeLine(M, t, 20, 330, 436, 9.5f);
     people(M, m, t, 40, 760, 478, 13);
+    banner(M, m, t, 400, 520, 15);
+    if (m.smoke) teargas(M, t, m.seed, 230);
 }
 void locParliament(const Mat3& M, float t, const Mood& m, const Pal& p) {
     drawSky(M, p, 395, t);
@@ -284,7 +414,10 @@ void locParliament(const Mat3& M, float t, const Mood& m, const Pal& p) {
     for (int i = 0; i < 44; i++) line(M, {-20.0f + i * 20.0f, 340}, {-20.0f + i * 20.0f, 395}, {25, 25, 30});
     line(M, {-40, 345}, {840, 345}, {25, 25, 30});
     flagPole(M, 90, 395, 175, m.halfMast, t);
+    if (m.police) policeLine(M, t, 150, 560, 424, 10.5f);
     people(M, m, t, 30, 770, 462, 15);
+    banner(M, m, t, 400, 505, 16);
+    if (m.smoke) teargas(M, t, m.seed, 380);
 }
 void locStateHouse(const Mat3& M, float t, const Mood& m, const Pal& p) {
     drawSky(M, p, 395, t);
@@ -352,40 +485,19 @@ void locHomestead(const Mat3& M, float t, const Mood& m, const Pal& p) {
 }
 void locBallot(const Mat3& M, float t, const Mood& m, const Pal& p) {
     drawSky(M, p, 395, t);
-    // A modest school polling station with screened booths, a queue lane and a staffed desk.
     grad(M, rect(150, 290, 500, 105), {225, 215, 190}, {170, 160, 140});
     grad(M, {{140, 290}, {660, 290}, {600, 250}, {200, 250}}, {150, 80, 60}, {105, 55, 45});
-    for (int w = 0; w < 5; ++w) {
-        fill(M, rect(190 + w * 86, 315, 42, 45), {95, 120, 135});
-        fill(M, rect(194 + w * 86, 319, 34, 37), {45, 65, 78});
-    }
     fill(M, rect(360, 330, 80, 65), {70, 55, 45});
-    line(M, {65, 445}, {265, 445}, {190, 165, 120});
-    line(M, {65, 472}, {265, 472}, {190, 165, 120});
-    for (int x = 75; x <= 255; x += 60) {
-        line(M, {float(x), 438}, {float(x), 478}, {105, 92, 75});
-        disc(M, {float(x), 438}, 2.5f, {205, 180, 130});
-    }
-    grad(M, rect(500, 420, 150, 18), {125, 82, 52}, {75, 48, 34});
-    fill(M, rect(514, 438, 8, 32), {72, 48, 35});
-    fill(M, rect(630, 438, 8, 32), {72, 48, 35});
-    fill(M, rect(520, 414, 30, 5), {242, 240, 226});             // ballot papers
-    fill(M, rect(558, 414, 18, 6), {24, 36, 95});                // indelible-ink pad
+    fill(M, rect(300, 305, 200, 18), {245, 245, 245});
+    for (int i = 0; i < 12; i++) fill(M, rect(310 + i * 15, 309, 9, 10), i % 3 == 0 ? Color{200, 40, 40} : (i % 3 == 1 ? Color{30, 30, 30} : Color{40, 140, 70}));
     flagPole(M, 110, 400, 190, m.halfMast, t);
     people(M, m, t, 40, 760, 452, 13);
-    // Sealed ballot box with one folded paper being cast at a time.
+    // ballot box in the foreground
     grad(M, {{290, 600}, {510, 600}, {500, 505}, {300, 505}}, {70, 110, 170}, {40, 70, 125});
-    render::drawPolygon(transformPoly(M, {{290, 600}, {510, 600}, {500, 505}, {300, 505}}), {22, 35, 62});
     fill(M, rect(365, 507, 70, 8), {15, 15, 20});
-    float cycle = std::fmod(t + 1.4f, 5.0f);
-    float drop = cycle < 1.6f ? cycle / 1.6f : 1.0f;
-    if (cycle < 2.0f) {
-        float y = 459.0f + drop * 44.0f;
-        fill(M, {{382, y}, {418, y}, {412, y + 20}, {388, y + 20}}, {248, 248, 240});
-        line(M, {390, y + 6}, {410, y + 6}, {135, 135, 140});
-    }
-    fill(M, rect(468, 540, 5, 23), {45, 60, 145});            // inked finger mark
-    disc(M, {470, 536}, 3.2f, {45, 60, 145});
+    float drop = std::fmod(t * 0.6f, 1.0f);
+    fill(M, rect(372, 470 + drop * 42, 56, 38), {248, 248, 240});
+    fill(M, rect(380, 480 + drop * 42, 40, 3), {120, 120, 130}); fill(M, rect(380, 489 + drop * 42, 30, 3), {120, 120, 130});
 }
 
 } // namespace

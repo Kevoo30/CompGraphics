@@ -12,8 +12,8 @@ struct Vec2 {
 };
 
 enum class AgeGroup { Youth, Adult, Senior };
-enum class Mode { Voting, Protest };
-enum class State { Approaching, Queuing, Waiting, Casting, Leaving, Gathering, Rallying, Dispersing, Finished, GaveUp };
+enum class Mode { Voting, Protest, Audience };
+enum class State { Approaching, Queuing, Waiting, ToBallotBox, Casting, Leaving, Gathering, Rallying, Dispersing, Listening, Finished, GaveUp };
 
 struct Barrier { float x = 0.0f; float y = 0.0f; float radius = 1.0f; };
 
@@ -49,6 +49,7 @@ struct Agent {
     float stateTime = 0.0f;
     float patience = 10.0f;
     float arrivalTime = 0.0f;
+    float heading = 0.0f;
 };
 
 struct DistrictTally {

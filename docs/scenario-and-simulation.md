@@ -9,7 +9,7 @@ All turnout and voter counts currently in the sample file are **illustrative sim
 - `id`: stable name for the event.
 - `location`: `court`, `bomas`, `street`, `parliament`, `state_house`, `stadium`, `homestead`, or `ballot`.
 - `place`, `date`, `headline`, `year_card`: documentary lower-third and year card text.
-- `type`: `voting` or `protest`.
+- `type`: `voting`, `protest`, or `audience`.
 - `crowd_size`: number of simulated agents.
 - `duration`: minimum event duration in seconds.
 - `seed`: deterministic variation seed.
@@ -20,7 +20,7 @@ All turnout and voter counts currently in the sample file are **illustrative sim
 
 Voting agents approach a station, wait in a line, cast a ballot, then leave. Long waits can exceed an agent's patience. Their simulated casts feed the on-screen tally and district schematic; the displayed figures are model output and should not be interpreted as real-time election results.
 
-Protest agents arrive over the first few seconds, gather around a rally point, maintain personal space through steering forces, and disperse later in the event. Barriers push agents away from restricted areas. The demonstration is peaceful and uses fictional crowd agents.
+Audience agents are present at the start of a hearing, announcement, or ceremony. They stand facing the scene and make small idle movements. Protest agents arrive over the first few seconds, gather around a rally point, maintain personal space through steering forces, and disperse later in the event. Barriers push agents away from restricted areas. Demonstrations are peaceful and use fictional crowd agents.
 
 ## Rendering approach and limits
 

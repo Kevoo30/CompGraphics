@@ -50,15 +50,29 @@ int main() {
     for (const auto& agent : rally.agents()) hasRallyingAgent |= agent.state == simulation::State::Rallying;
     assert(hasRallyingAgent);
 
+    simulation::Config audience;
+    audience.mode = simulation::Mode::Audience;
+    audience.agents = 18;
+    simulation::Simulation listeners(audience);
+    const auto openingPositions = listeners.agents();
+    advance(listeners, 8.0f);
+    for (std::size_t i = 0; i < listeners.agents().size(); ++i) {
+        const auto& person = listeners.agents()[i];
+        assert(person.state == simulation::State::Listening);
+        assert(std::fabs(person.position.x - openingPositions[i].position.x) < .001f);
+        assert(std::fabs(person.position.y - openingPositions[i].position.y) < .001f);
+        assert(person.heading == 180.0f);
+    }
+
     const auto fixture = std::filesystem::temp_directory_path() / "compgraphics_scenario_test.json";
     {
         std::ofstream out(fixture);
-        out << R"({"label":"test","events":[{"id":"vote","type":"voting","location":"ballot","place":"POLLING STATION","date":"TEST DATE","headline":"TEST EVENT","year_card":2024,"crowd_size":12,"duration":9,"stations":2,"barriers":[{"x":1,"y":2,"radius":0.5}],"districts":[{"name":"A","turnout":0.7,"expected_voters":100,"map_x":0.2,"map_y":0.8}]}]})";
+        out << R"({"label":"test","events":[{"id":"vote","type":"voting","location":"ballot","place":"POLLING STATION","date":"TEST DATE","headline":"TEST EVENT","year_card":2024,"crowd_size":12,"duration":9,"stations":2,"barriers":[{"x":1,"y":2,"radius":0.5}],"districts":[{"name":"A","turnout":0.7,"expected_voters":100,"map_x":0.2,"map_y":0.8}]},{"id":"hearing","type":"audience","location":"court","crowd_size":8,"duration":9}]})";
     }
     scenario::Data loaded;
     std::string error;
     assert(scenario::load(fixture.string(), loaded, error));
-    assert(loaded.events.size() == 1);
+    assert(loaded.events.size() == 2);
     assert(loaded.events[0].mode == simulation::Mode::Voting);
     assert(loaded.events[0].location == "ballot");
     assert(loaded.events[0].headline == "TEST EVENT");
@@ -66,6 +80,7 @@ int main() {
     assert(loaded.events[0].barriers.size() == 1);
     assert(loaded.events[0].districts[0].name == "A");
     assert(std::fabs(loaded.events[0].districts[0].turnout - .7f) < .001f);
+    assert(loaded.events[1].mode == simulation::Mode::Audience);
     std::filesystem::remove(fixture);
 
     std::puts("simulation and scenario checks passed");

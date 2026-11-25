@@ -14,6 +14,9 @@ struct Mood {
     bool  halfMast;     // flag at half-mast
     float energy;       // 0 calm ... 1 surging
     int   seed;         // changes buildings / people so repeated places don't look identical
+    const char* banner = nullptr;   // text on a cloth banner carried by marchers
+    bool  smoke = false;            // tear-gas haze drifting over the crowd
+    bool  police = false;           // a line of police with shields in the distance
 };
 
 // t = seconds since this shot started (drives all the motion). M = camera / slide transform for this shot.
